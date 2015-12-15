@@ -59,21 +59,22 @@ class PairMSUCG_NEIGH : public Pair {
   virtual void allocate();
 
 
-  /*---YP--- All the contents above are from pair_lj_cut.* source
-  /*---YP--- In-house codes starts from here */
+  /*Comments:  All the contents above are from pair_lj_cut.* source
+  /*Comments:  In-house codes starts from here */
 
-  double T, kT;     /*---YP--- target temperature */
-  int *type_linked; /*---YP--- Add one more paramters for each type
-                    /*---YP--- to store the linked types (that represent
-		    /*---YP--- other states for the same particle) */
+  double T, kT;     /*Comments:  target temperature */
+  int *type_linked; /*Comments:  Add one more paramters for each type
+                    /*Comments:  to store the linked types (that represent
+		    /*Comments:  other states for the same particle) */
  /* Force check parameter */
   int countiter;
   int countneigh;
-  double P(int, int, double*, double*, double, double*); /*---YP--- function of calculating P(i,_a)
-                                  /*---YP--- and its partial derivative  */
+  double P(int, int, double*, double*, double, double*, int); /*Comments:  function of calculating P(i,_a)
+                                  /*Comments:  and its partial derivative  */
 
 
-  double *W, **dW;
+  double *W, **dW, *U;
+  double **subforce_1, **subforce_2, **subforce_3, **subforce_4, **totalforce;
   double nmax;
 
   int pack_reverse_comm(int, int, double *);
