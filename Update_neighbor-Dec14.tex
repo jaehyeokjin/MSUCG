@@ -1,0 +1,418 @@
+\documentclass[11pt, oneside]{article}   	% use "amsart" instead of "article" for AMSLaTeX format
+\usepackage{geometry}                		% See geometry.pdf to learn the layout options. There are lots.
+\geometry{letterpaper}                   		% ... or a4paper or a5paper or ... 
+%\geometry{landscape}                		% Activate for for rotated page geometry
+%\usepackage[parfill]{parskip}    		% Activate to begin paragraphs with an empty line rather than an indent
+\usepackage{graphicx}				% Use pdf, png, jpg, or eps§ with pdflatex; use eps in DVI mode
+								% TeX will automatically convert eps --> pdf in pdflatex		
+\usepackage[T1]{fontenc}
+\usepackage{multirow}
+\usepackage[latin9]{inputenc}
+\usepackage{amssymb, amsmath}
+\let\titlefont\undefined
+\usepackage[fontsize=11pt]{scrextend}
+\usepackage[sc,osf]{mathpazo}   % With old-style figures and real smallcaps.
+\linespread{1.025}     
+\usepackage[euler-digits,small]{eulervm}
+\usepackage{color}
+\AtBeginDocument{\renewcommand{\hbar}{\hslash}}
+
+\title{Density dependent UCG code: theory and implementation}
+\author{Jaehyeok Jin}
+
+\begin{document}
+\maketitle \noindent 
+\textit{Note: } In this document, the definition of the state probability $p_{s_i,\alpha/\beta}$ is quite complicated, so we will use following reduced notation of the probability to implement it into the force field formula henceforth. A short-hand notation will be marked as {\color{blue} blue line.} \\ \noindent
+\textit{Note 2:} Following changes are updated: 
+\begin{itemize}
+\item{Previously, the coefficient on the derivative of the state probability was $\frac{1}{0.004c\cdot r_{cut}}$, but it has changed to $\frac{1}{0.0004c\cdot r_{cut}}$}
+\item{LAMMPS routine is changed much specifically and wrote down the pseudo-code in much detailed manner.}
+\end{itemize}
+\section{Probability function setting}
+\subsection{Definition of density-dependent state probability}
+\subsubsection{Number function}
+Now, consider the probability function is totally dependent on the local geometry of the molecule. 
+Define the number function $w_i$ as below.
+\begin{align*}
+w_i &= \sum_j  \frac{1}{2} \Biggl(1-\textrm{tanh}(\frac{r_{ij} - r_{cut}}{0.001 \cdot r_{cut}}) \Biggr)\\
+\end{align*}
+By using a {\color{blue} short-hand notation}
+\begin{align*}
+w_i &= \sum_j  \frac{1}{2} \Biggl(1-\textrm{tanh}(\frac{r_{ij} - r_{cut}}{0.001 \cdot r_{cut}}) \Biggr)\\
+&= \sum_j  \color {blue}\frac{1}{2} \bigl( 1 - t(r_{ij}) \bigr) \\
+&:=\color{blue} \sum_j \ w_{ij}
+\end{align*}
+\subsubsection{Choice of $r_{cut}$} 
+
+We can set $r_{cut}$ value arbitrarily less than $r_{lj cut}$ to ensure that for $r_{ij} \leq r_{lj}$ $w_{ij}  \simeq 1$ which can add one particle in the number function. The behavior of $w_{ij}$ function is highly dependent on the cut-off value, see the figure below. Figure 1 denotes the behavior of $w_{ij}$ function in terms of different $r$ value. In this case, $r_{cut}$ is chosen as 3.5 $\AA$. 
+
+Therefore, number function $w_{ij}$ shows following behavior: $w_{ij} \simeq 1$ (when $r < r_{cut}$), $w_{ij} \simeq 0$ (when $r > r_{cut}$). 
+\begin{center}
+\includegraphics[width=2.0in]{w.png} \\
+\textbf{Figure 1}: A behavior of $w_i$ function by differing $r$ value: $r_{cut}=3.5 \AA$
+\end{center}
+
+Also, let's set the corresponding "normalized" probability for two states as 
+\begin{align*}
+P_{i,a} = + \frac{1}{2} \cdot \textrm{tanh}(\frac{w_i - c}{0.1c}) + \frac{1}{2} \\
+P_{i,b} = - \frac{1}{2} \cdot \textrm{tanh}(\frac{w_i - c}{0.1c}) + \frac{1}{2}
+\end{align*}
+which gives $P_{i,a}+P_{i,b} = 1$, the normalized probability. For the sake of brevity, we use the short-hand notation henceforth as:
+\begin{align*}
+P_{i,a} = \color{blue}{+ \frac{1}{2}\bigl(  \textrm{tanh}(\frac{w_i - c}{0.1c}) + 1 \bigr) }\\
+P_{i,b} = \color{blue}{- \frac{1}{2} \bigl( \textrm{tanh}(\frac{w_i - c}{0.1c}) -1 \bigr)}
+\end{align*}
+However, it is worth mentioning that the shape of these probabilities also determined by the $c$ value.
+\subsubsection{Choice of $c$ value}
+Since the state probability is a function of $c$ value, it is needed to select an appropriate $c$ value to assign the right state probability. To show the effect of $c$ value over the state probability, let's examine the $c$ value dependency on the $P_{i,a}$ probability. From definition,
+\begin{align*}
+P_{i,a} = +\frac{1}{2} \cdot \textrm{tanh}(\frac{w_i -c}{0.1c}) + \frac{1}{2}
+\end{align*}
+Thus, changing the $c$ value will effect the shape of slope of tanh function and the reflection point of the $P_{i,a}$ value due to $\frac{\partial P_{i,a}}{\partial w_i} = 0 \leftrightarrow w_i = c$, see Figure 2.
+\begin{center}
+\includegraphics[width=3.0in]{P_reduced.png} \\
+\textbf{Figure 2}: A dependence of state probability function $P_{i,a}$ on the coefficient $c$ value
+\end{center}
+
+\subsubsection{Final probability definition}
+Thus, plugging the expression of $w_i$ into $P_{i,a}$ and $P_{i,b}$ gives
+
+\begin{align*}
+P_{i,a}  &= + \frac{1}{2} \cdot \textrm{tanh}\Biggl(\frac{ \frac{1}{2}  \sum_j (1-\textrm{tanh}(\frac{r_{ij} -r_{cut}}{0.001 \cdot r_{cut}})) - c}{0.1c}\Biggr) + \frac{1}{2}  \\
+&= + \frac{1}{2} \cdot \textrm{tanh}\Biggl(\frac{  \frac{1}{2} \sum_j (1-\textrm{tanh}(\frac{\sqrt{(x_i-x_j)^2+(y_i-y_j)^2+(z_i-z_j)^2} -r_{cut}}{0.001 \cdot r_{cut}})) - c}{0.1c}\Biggr) + \frac{1}{2} \\
+&=+ \frac{1}{2} \cdot \textrm{tanh}\Biggl( \frac{j}{0.2c} - \frac{1}{0.2c} \sum_j \textrm{tanh}(\frac{\sqrt{(x_i-x_j)^2+(y_i-y_j)^2+(z_i-z_j)^2} -r_{cut}}{0.001 \cdot r_{cut}}) -10\Biggr) + \frac{1}{2}
+\end{align*}
+Thus the partial derivative of the system is
+\begin{align*}
+\nabla_i P_{i,a} = \Biggl( \frac{\partial}{\partial x_i} P_{i,a},\frac{\partial}{\partial y_i} P_{i,a},\frac{\partial}{\partial z_i} P_{i,a}\Biggr)
+\end{align*}
+Each component is followed as
+\begin{align*}
+\frac{\partial}{\partial x_i} P_{i,a} =& \frac{1}{2} \cdot \textrm{sech}^2 \Biggl(\frac{ \frac{1}{2} \sum_j (1-\textrm{tanh}(\frac{r_{ij} -r_{cut}}{0.001 \cdot r_{cut}})) - c}{0.1c}\Biggr) \times \frac{\partial}{\partial x} \Biggl(\frac{  \frac{1}{2}  \sum_j (1-\textrm{tanh}(\frac{r_{ij} -r_{cut}}{0.001 \cdot r_{cut}})) - c}{0.1c}\Biggr) \\
+&=\color{blue} \frac{1}{2} \cdot S(r_{ij}) \times T(r_{ij})
+\end{align*}
+Let's say the first and the second part of the RHS as $\color{blue} S(r_{ij}),\,T(r_{ij})$, then by above equation
+\begin{align*}
+S(r_{ij}) & = \color{blue}\textrm{sech}^2 \Biggl( \frac{w_i - c}{0.1c}\Biggr)
+\end{align*}
+Also for $T(r_{ij})$,
+\begin{align*}
+T(r_{ij}) :&=\frac{\partial}{\partial x} (\frac{  \frac{1}{2} \sum_j (1-\textrm{tanh}(\frac{r_{ij} -r_{cut}}{0.001 \cdot r_{cut}})) - c}{0.1c}) \\
+&=  - \frac{1}{0.2c} \frac{\partial}{\partial x} \Biggl( \sum_j \textrm{tanh}(\frac{\sqrt{(x_i-x_j)^2+(y_i-y_j)^2+(z_i-z_j)^2} -r_{cut}}{0.001 \cdot r_{cut}}) \Biggr)\\
+& = -\frac{1}{0.2c} \sum_j \textrm{sech}^2 (\frac{\sqrt{(x_i-x_j)^2+(y_i-y_j)^2+(z_i-z_j)^2} -r_{cut}}{0.001 \cdot r_{cut}}) \\
+& \quad \times \frac{(x_i - x_j)}{0.001\cdot r_{cut}\cdot\sqrt{(x_i-x_j)^2+(y_i-y_j)^2+(z_i-z_j)^2}} \\
+&= - \frac{1}{0.2c} \sum_j \textrm{sech}^2(\frac{r_{ij} - r_{cut}}{0.001 \cdot r_{cut}}) \times \frac{\Delta x}{0.001\cdot r_{cut} \cdot r_{ij}} \\
+&= \color{blue} -\frac{1}{0.2c} \sum_j \frac{\partial}{\partial x} t(r_{ij})
+\end{align*}
+which is 
+\begin{align*}
+t(r_{ij}) &=\color{blue} \textrm{tanh} \bigl(\frac{r_{ij} - r_{cut}}{0.001r_{cut}}\bigr) 
+\end{align*}
+The notation used in LAMMPS is $\Delta x = x_i - x_j, \, \Delta y = y_i - y_j,\, \Delta z = z_i - z_j$. Thus,
+\begin{align*}
+\frac{\partial}{\partial x_i} P_{i,a} & =  \color{blue} \frac{1}{2} \cdot S(r_{ij}) \times T(r_{ij})\\
+&= \color{blue} \frac{1}{2}\cdot \textrm{sech}^2 \Biggl( \frac{w_i - c}{0.1c}\Biggr) \cdot \color{blue} T(r_{ij}) \\
+& = \frac{1}{2} \cdot \textrm{sech}^2 \Biggl(\frac{ \frac{1}{2}  \sum_j (1-\textrm{tanh}(\frac{r_{ij} -r_{cut}}{0.001\cdot r_{cut}})) - c}{0.1c}\Biggr)  \times \Biggl( - \frac{1}{0.2c} \sum_j \textrm{sech}^2(\frac{r_{ij} - r_{cut}}{0.001\cdot r_{cut}}) \times \frac{\Delta x}{0.001\cdot r_{cut} \cdot r_{ij}} \Biggr) \\
+&= -\frac{1}{0.4c } \cdot \textrm{sech}^2 \Biggl(\frac{  \frac{1}{2} \sum_j (1-\textrm{tanh}(\frac{r_{ij} - r_{cut}}{0.001 \cdot r_{cut}})) - c}{0.1c}\Biggr) \times \Biggl( \sum_j \textrm{sech}^2(\frac{r_{ij} -  r_{cut}}{0.001\cdot r_{cut}}) \times \frac{\Delta x}{0.001\cdot r_{cut} \cdot  r_{ij}} \Biggr) \\
+&= \color{blue}-\frac{1}{0.4c} \cdot \textrm{sech}^2 \biggl( \frac{w_i - c}{0.1c}\biggr) \times \biggl( \sum_j \frac{\partial}{\partial x} t(r_{ij}) \biggr) \\
+& = -\frac{\textrm{sech}^2 (\frac{w_i-c}{0.1c})}{0.0004 c \cdot r_{cut}} \times \Bigl( \sum_j \textrm{sech}^2 (\frac{r_{ij}-r_{cut}}{0.001\cdot r_{cut}})\Bigr)  \times   \Big[\frac{\Delta x}{r_{ij}},\frac{\Delta y}{r_{ij}},\frac{\Delta z}{r_{ij}}\Big]
+\end{align*}
+Similarly,
+\begin{align*}
+\frac{\partial}{\partial y_i} P_{i,a} & =  -\frac{1}{0.2c } \cdot \textrm{sech}^2 \Biggl(\frac{ \sum_j (1-\textrm{tanh}(\frac{r_{ij} - r_{cut}}{0.001 \cdot r_{cut}})) - c}{0.1c}\Biggr) \times \Biggl( \sum_j \textrm{sech}^2(\frac{r_{ij} -  r_{cut}}{0.001\cdot r_{cut}}) \times \frac{\Delta y}{0.001\cdot r_{ij}} \Biggr) \\
+&=  \color{blue}-\frac{1}{0.2c} \cdot \textrm{sech}^2 \biggl( \frac{w_i - c}{0.1c}\biggr) \times \biggl( \sum_j \frac{\partial}{\partial y} t(r_{ij}) \biggr) \\
+\frac{\partial}{\partial z_i} P_{i,a} & = -\frac{1}{0.2c } \cdot \textrm{sech}^2 \Biggl(\frac{ \sum_j (1-\textrm{tanh}(\frac{r_{ij} - r_{cut}}{0.001 \cdot r_{cut}})) - c}{0.1c}\Biggr) \times \Biggl( \sum_j \textrm{sech}^2(\frac{r_{ij} -  r_{cut}}{0.001\cdot r_{cut}}) \times \frac{\Delta z}{0.001\cdot r_{ij}} \Biggr)\\
+&=  \color{blue}-\frac{1}{0.2c} \cdot \textrm{sech}^2 \biggl( \frac{w_i - c}{0.1c}\biggr) \times \biggl( \sum_j \frac{\partial}{\partial z} t(r_{ij}) \biggr) 
+\end{align*}
+Therefore, the $\nabla_i P_{i,a}$ is followed as
+\begin{align}
+\nabla_i {P_{i,a}} & = \bigl( \frac{\partial}{\partial x_i} P_{i,a}, \frac{\partial}{\partial y_i} P_{i,a}, \frac{\partial}{\partial z_i} P_{i,a} \bigr) \notag \\
+&= - \frac{\textrm{sech}^2 \bigl( \frac{w_i-c}{0.1c} \bigr)  }{0.0004c\cdot r_{cut}} \times \Biggl( \sum_j \textrm{sech}^2 \bigl(\frac{r_{ij}-r_{cut}}{0.001r_{cut}}\bigr) \Biggr) \times \Big[\frac{\Delta x}{r_{ij}}, \frac{\Delta y}{r_{ij}}, \frac{\Delta x}{r_{ij}}\Big] 
+\end{align}
+
+\subsection{Neighbor hypothesis}
+However, for this probability, the dependence of $r_i$ is not strictly followed by $p_{s_i}$ term. For example, $p_{s_j}$ can have a dependency on the $r_i$ value.
+
+\begin{flushleft}
+\textbf{Lemma:} if the particle $j$ is in a neighbor of the particle $i$, then also particle $i$ is in a neighbor of the particle $j$.\\
+\textit{Proof:} 
+\begin{align*}
+p_{s_j} = p_{s_j} (r_i) \rightarrow i \in \mathcal{N}(r_j,r_{\textrm{lj cut}}) \\
+\leftrightarrow |r_i - r_j| \leq r_{\textrm{lj cut}} \\
+\leftrightarrow |r_j - r_i| \leq r_{\textrm{lj cut}} \\
+\leftrightarrow j \in \mathcal{N}(r_i,r_{\textrm{lj cut}})
+\end{align*}
+\begin{flushright}
+$\Box$
+\end{flushright}
+\end{flushleft}
+This Lemma is easily explained by the following diagram.
+\begin{center}
+\includegraphics[width=3.0in]{lemma.png} \\
+\textbf{Figure 3}: A relation about neighboring particles
+\end{center}
+\subsection{Summation scheme}
+Therefore, to consider the summation over particles $i,\,j,\,k$,  
+
+\begin{center}
+\includegraphics[width=5.0in]{summation_scheme.png} \\
+\textbf{Figure 4}: Summation among three particles $i,\,j,\,k$
+\end{center}
+\section{Force Field expression}
+
+
+\subsection{Mixed UCG FF LJ parameters}
+From the past note that I've implemented in the mixed UCG ansatz, the force acting on particle $i$ can be expressed from the free energy expression $w^{mix} (\mathbf{r}^n)$. 
+
+\begin{align}
+w^{mix}(\mathbf{r}^n) &= \sum_{\text{particles } i} \sum_{\text{states } \alpha} p_{s_i, \alpha} (\mu_{\alpha} - kT \ln(p_{s_i, \alpha})) + \sum_{\text{neighs } ij} \sum_{\text{state pairs } \alpha, \beta} p_{s_i, \alpha} p_{s_j, \beta} u_{\alpha \beta} (r_{ij})
+\end{align}
+
+Thus, the force expression is 
+\begin{align}
+\mathbf{f}_i &\equiv -\nabla_i w^{mix}(\mathbf{r}^n) \\
+\mathbf{f}_i & = -\nabla_i \left( \sum_{j} \sum_{\alpha} p_{s_j, \alpha} (\mu_{\alpha} - kT \ln(p_{s_j, \alpha})) + \sum_{jk} \sum_{\alpha \beta} p_{s_j, \alpha} p_{s_k, \beta} u_{\alpha, \beta} (r_{jk}) \right) \\
+\mathbf{f}_i & = - \sum_{j} \sum_{\alpha} (\nabla_i p_{s_j, \alpha}) (\mu_{\alpha} - kT \ln(p_{s_j, \alpha}) - kT) + \ldots \\ \notag
+& \quad \quad \ldots - \sum_{jk} \sum_{\alpha \beta} p_{s_j, \alpha} p_{s_k, \beta} \nabla_i u_{\alpha \beta} (r_{jk}) - \sum_{jk} \sum_{\alpha \beta} (\nabla_i (p_{s_j, \alpha} p_{s_k, \beta})) u_{\alpha, \beta} (r_{jk})
+\end{align}
+
+For the sake of concision, let's separate the force component into three parts from the natural order, i.e. $\mathbf{f}_i = \mathbf{f}^{(1)}_i +\mathbf{f}^{(2)}_i +\mathbf{f}^{(3)}_i $ where
+\begin{align}
+\mathbf{f}^{(1)}_i &= - \sum_{j} \sum_{\alpha} (\nabla_i p_{s_j, \alpha}) (\mu_{\alpha} - kT \ln(p_{s_j, \alpha}) - kT)  := {\color{blue}- \sum_{j} \sum_{\alpha} \mathbb{A}_{ij}}\\
+\mathbf{f}^{(2)}_i &= - \sum_{jk} \sum_{\alpha \beta} p_{s_j, \alpha} p_{s_k, \beta} \nabla_i u_{\alpha \beta} (r_{jk}) := {\color{blue}- \sum_{jk} \sum_{\alpha \beta}  \mathbb{B}_{ijk}} \\
+\mathbf{f}^{(3)}_i &= - \sum_{jk} \sum_{\alpha \beta} (\nabla_i (p_{s_j, \alpha} p_{s_k, \beta})) u_{\alpha, \beta} (r_{jk}) := {\color{blue}- \sum_{jk} \sum_{\alpha \beta}  \mathbb{C}_{ijk}}
+\end{align}
+
+The form of each subforce term will be examined on the following subsections.
+
+\subsection{First subforce term}
+The first subforce term $\mathbf{f}^{(1)}_i (\mathbf{r}^n)$, the entropic contribution, can be represented by using the short-hand notation that
+\begin{align*}
+\color{blue} \mathbb{A}_{ij} := (\nabla_i p_{s_j, \alpha}) (\mu_{\alpha} - kT \ln(p_{s_j, \alpha}) - kT) 
+\end{align*}
+Then, the first subforce term can be decomposed into 
+\begin{align}
+\mathbf{f}^{(1)}_i &= - \sum_{j} \sum_{\alpha} (\nabla_i p_{s_j, \alpha}) (\mu_{\alpha} - kT \ln(p_{s_j, \alpha}) - kT)  \\ \notag
+&= \color{blue} - \sum_{j\neq i} \sum_{\alpha}  \mathbb{A}_{ij}  - \sum_{i} \sum_{\alpha} \mathbb{A}_{i}   
+\end{align}
+
+Above expression is composed of two cases: particle $j$ is $i$ or is not $i$. The second term for the force component can be simply written as below because of the normalization of the probability, i.e. $\sum_i \nabla_i p_{s_i} = 0$, which gives
+\begin{align}
+ - \sum_{i} \sum_{\alpha} \mathbb{A}_{i}    = - \sum_{\alpha} (\nabla_i p_{s_i, \alpha}) (\mu_{\alpha} - kT \ln(p_{s_i, \alpha}))
+\end{align}
+
+However, for the first term, two things are worth mentioning: first, the simple cancellation cannot be applied, because it is summation of $p_{s_j}$ over $j$ with $\nabla_i$. To retain the dependence of the $r_i$, only the term in the $p_{s_j}$ which has $r_i$ in the summation will be survived because of the summation index $j\neq i$. Also, $\forall j \neq i$, $\nabla_i p_{s_i, \alpha/\beta}$ doesn't have to be zero for the case, see the lemma 2 below. 
+
+\textbf{Lemma 2:} For this density-dependent state probability case, $\forall j \neq i$, $\nabla_i p_{s_i, \alpha/\beta}$ doesn't necessarily have to be zero. 
+
+\textit{Proof:}  To show that, let's first start with the derivative of $P_{j,\alpha/\beta}$.  
+\begin{align}
+\nabla_i P_{j,\alpha/\beta} &= \nabla_i \Biggl(\frac{1}{2} \Bigl(1 \pm  \textrm{tanh} \bigl( \frac{w_j-c}{0.1c} \bigr)  \Bigr)\Biggr) \\ \notag
+& = \pm \frac{1}{2} \cdot \textrm{sech}^2 \bigl( \frac{w_j-c}{0.1c} \bigr) \times \frac{1}{0.1c}  \cdot \nabla_i \bigl(w_j\bigr) \\ \notag
+& = \pm \frac{1}{2} \cdot \textrm{sech}^2 \bigl( \frac{w_j-c}{0.1c} \bigr) \times \frac{1}{0.1c}  \cdot \nabla_i \Biggl(\sum_{t \in \mathcal{N}(j;r_{lj cut})} \bigl(\frac{1}{2} \bigl(1-\textrm{tanh}(\frac{r_{jt}-r_{cut}}{0.001r_{cut}})\bigr)\bigr)\Biggr) \\ \notag
+&= \pm \frac{\textrm{sech}^2 \bigl( \frac{w_j-c}{0.1c} \bigr)  }{0.2c} \times  \sum_{t \in \mathcal{N}(j;r_{lj cut})} \Biggl( - \frac{1}{2} \textrm{sech}^2 \bigl(\frac{r_{jt}-r_{cut}}{0.001r_{cut}}\bigr)   \times  \nabla_i \bigl(\frac{r_{jt}}{0.001r_{cut}}\bigr) \Biggr) \\ \notag
+&= \mp \frac{\textrm{sech}^2 \bigl( \frac{w_j-c}{0.1c} \bigr)  }{0.0004c\cdot r_{cut}} \times  \sum_{t \in \mathcal{N}(j;r_{lj cut})} \Biggl(\textrm{sech}^2 \bigl(\frac{r_{jt}-r_{cut}}{0.001r_{cut}}\bigr)  \times \Big[\frac{\Delta x}{r_{jt}}, \frac{\Delta y}{r_{jt}}, \frac{\Delta x}{r_{jt}}\Big] \Biggr)
+\end{align}
+Therefore, for $j \neq i$, the necessary condition of $\nabla_i p_{s_j,\alpha/\beta} \neq 0$ is that $\exists i \in N(j;r_{lj cut})$. For that case, $\nabla_i p_{s_j,\alpha/\beta}$ reduces into 
+\begin{align}
+\nabla_i p_{s_j,\alpha/\beta} = \mp \frac{\textrm{sech}^2 \bigl( \frac{w_j-c}{0.1c} \bigr)  }{0.0004c\cdot r_{cut}} \times \textrm{sech}^2 \bigl(\frac{r_{ij}-r_{cut}}{0.001r_{cut}}\bigr)  \times \Big[\frac{\Delta x}{r_{ij}}, \frac{\Delta y}{r_{ij}}, \frac{\Delta x}{r_{ij}}\Big] 
+\end{align}
+\begin{flushright}
+$\Box$
+\end{flushright}
+
+Thus, the first term can be expressed as
+\begin{align}
+ - \sum_{j\neq i} \sum_{\alpha}  \mathbb{A}_{ij}= - \sum_{j \neq i} \sum_{\alpha} \Biggl(\mp\frac{\textrm{sech}^2 \bigl( \frac{w_j-c}{0.1c} \bigr)  }{0.0004c\cdot r_{cut}} \times \textrm{sech}^2 \bigl(\frac{r_{ij}-r_{cut}}{0.001r_{cut}}\bigr)  \times \Big[\frac{\Delta x}{r_{ij}}, \frac{\Delta y}{r_{ij}}, \frac{\Delta x}{r_{ij}}\Big] \Biggr) \times \bigl( \mu_{\alpha} - kT \ln(p_{s_i, \alpha}) -kT\bigr)
+\end{align}
+However, since $\nabla_i (p_{s_j,\alpha}) = -\nabla_i (p_{s_j,\beta}) $, the only remained term is
+\begin{align}
+- \sum_{j\neq i} \sum_{\alpha}  \mathbb{A}_{ij}= - \sum_{j \neq i} \sum_{\alpha} \Biggl( \bigl(\mp\frac{\textrm{sech}^2 \bigl( \frac{w_j-c}{0.1c} \bigr)  }{0.0004c\cdot r_{cut}} \times \textrm{sech}^2 \bigl(\frac{r_{ij}-r_{cut}}{0.001r_{cut}}\bigr)  \times \Big[\frac{\Delta x}{r_{ij}}, \frac{\Delta y}{r_{ij}}, \frac{\Delta x}{r_{ij}}\Big]\bigr)  \times \bigl( \mu_\alpha - kT \ln(p_{s_i, \alpha}) \bigr) \Biggr)
+\end{align}
+\subsection{Second subforce term}
+From definition of $\mathbf{f}_i^{(2)}$, 
+\begin{align*}
+\mathbf{f}^{(2)}_i &= - \sum_{jk} \sum_{\alpha \beta} p_{s_j, \alpha} p_{s_k, \beta} \nabla_i u_{\alpha \beta} (r_{jk}) 
+\end{align*}
+However, $u_{\alpha \beta} (r_{jk})$ only has dependency on $r_{jk}=|r_j - r_k|$ thus, to make the derivative term non-zero, 
+
+This subforce term is invariant under the first case, where the state probability is only dependent on the particle's position. Thus, for the two-state system, detailed expression for the second subforce term is
+\begin{align}
+\mathbf{f}^{(2)}_i &= - \sum_{j}\sum_{\alpha \beta} p_{s_i,\alpha} p_{s_j,\beta} \nabla_i u_{\alpha \beta} (r_{ij}) \\ \notag
+&= -\sum_{j} \Biggl(  p_{s_i,\alpha} p_{s_j,\alpha} \nabla_i u_{\alpha \alpha} (r_{ij}) + \Bigl( p_{s_i,\alpha} p_{s_j,\beta} +  p_{s_i,\beta} p_{s_j,\alpha}\Bigr)\cdot\nabla_i u_{\alpha \beta} (r_{ij}) + p_{s_i,\beta} p_{s_j,\beta} \nabla_i u_{\beta \beta} (r_{ij}) \Biggr)
+\end{align}
+
+\subsection{Third subforce term}
+From the definition of $\mathbf{f}_i^{(3)}$, 
+\begin{align}
+\mathbf{f}^{(3)}_i &= - \sum_{jk} \sum_{\alpha \beta} (\nabla_i (p_{s_j, \alpha} p_{s_k, \beta})) u_{\alpha, \beta} (r_{jk}) \\ \notag
+& = - \sum_{jk} \sum_{\alpha \beta} \Biggl( (\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\beta}) + (p_{s_j,\alpha} \cdot \nabla_i p_{s_k,\beta}) \Biggr)  u_{\alpha, \beta} (r_{jk}) \\
+&=  \color{blue}- \sum_{jk} \sum_{\alpha \beta} \bigl( \mathbb{C}_{ijk} \bigr)
+\end{align}
+Note that the above equation has $\mathbb{C}_{ijk}$ term in short-hand notation for the sake of brevity. Since it is the force expression of the particle $i$, the only non-zero terms from either $\nabla_i p_{s_j,\alpha}$ or $\nabla_i p_{s_j,\beta}$ will be survived after a summation. However, from the probability function construction that, 
+\begin{align}
+P_{j,\alpha/\beta} &= \frac{1}{2} \Biggl( \pm\textrm{tanh} \Bigl( \frac{\sum_{t \in \mathcal{N}(j;r_{lj cut})} \frac{1}{2} \bigl(1-\textrm{tanh}(\frac{\sqrt{(x_j-x_t)^2+(y_j-y_t)^2+(z_j-z_t)^2}-r_{cut}}{0.001r_{cut}})\bigr)-c}{0.1c} \Bigr) + 1 \Biggr) \\ \notag
+&=  \frac{1}{2} \Bigl( \pm\textrm{tanh} \bigl( \frac{w_j-c}{0.1c} \bigr) + 1 \Bigr)
+\end{align}
+From the summation index above, $t \in \mathcal{N}(j;r_{lj cut})$ means the particle $t$ is the neighbor of particle $j$ within cutoff radius $r_{lj cut}$. However, in this state probability case, the previous assumption that we used for the position dependent case $\mathbf{\nabla_{i\neq j}p_{s_j,\alpha} =0}$ is not valid in here. 
+
+Furthermore, from the \textbf{Lemma 2}, we know that the summation index $\sum_{jk}$ cannot be simply reduced into $\sum_i$ for $\textbf{f}_i^{(3)}$. However, one can still decompose it by following scheme.
+\begin{align}
+\sum_{jk} \mathbb{C}_{ijk} &= \sum_{j \neq k, k = i} \mathbb{C}_{ijk}+\sum_{j=i, k\neq j} \mathbb{C}_{ijk}+  \sum_{\substack{j\neq i \\ k \neq i}}\mathbb{C}_{ijk} \\ \notag
+& = \Biggl( \sum_{j \neq k, k = i} \mathbb{C}_{ijk}+\sum_{j=i, k\neq j} \mathbb{C}_{ijk}\Biggr) + \Biggl(\sum_{\substack{j \in N(i;r_{cut}) \\ k \notin N(i;r_{cut})}} \mathbb{C}_{ijk}+ \sum_{\substack{j \notin N(i;r_{cut})\\ k \in N(i;r_{cut})}}\mathbb{C}_{ijk} + \sum_{\substack{j \in N(i;r_{cut}) \\ k \in N(i;r_{cut})}} \mathbb{C}_{ijk}\Biggr) \\ \notag
+& \quad \color{blue} \quad \quad \textrm{two particles interaction}  \quad \quad \quad \quad \color{red} \textrm{three particles interaction} 
+\end{align}
+\subsubsection{Two particles interaction term}
+For the simple two-particle interaction term, the expression of third subforce term is simply from the first example case.
+\begin{align}
+\sum_{j \neq k, k=i} \mathbb{C}_{ijk} & = \sum_{j\neq i} \mathbb{C}_{ijk} \\ \notag
+&=  \sum_{j \neq i} \sum_{\alpha \beta} \Biggl( (\nabla_i p_{s_j,\alpha} \cdot p_{s_i,\beta}) + (p_{s_j,\alpha} \cdot \nabla_i p_{s_i,\beta}) \Biggr)  u_{\alpha, \beta} (r_{ij}) \\ \notag
+&=  \sum_{j \neq i} \Biggl( (\nabla_i p_{s_j,\alpha} \cdot p_{s_i,\alpha}) + (p_{s_j,\alpha} \cdot \nabla_i p_{s_i,\alpha}) +(\nabla_i p_{s_j,\alpha} \cdot p_{s_i,\beta}) + (p_{s_j,\alpha} \cdot \nabla_i p_{s_i,\beta}) \\ \notag
+& \quad \quad \quad \,+(\nabla_i p_{s_j,\beta} \cdot p_{s_i,\alpha}) + (p_{s_j,\beta} \cdot \nabla_i p_{s_i,\alpha}) +(\nabla_i p_{s_j,\beta} \cdot p_{s_i,\beta}) + (p_{s_j,\beta} \cdot \nabla_i p_{s_i,\beta}) \Biggr)  u_{\alpha, \beta} (r_{ij}) \\ \notag
+\end{align}
+The inner sum term can be reduced as
+\begin{align}
+(\nabla_i p_{s_j,\alpha} \cdot p_{s_i,\alpha}) + (p_{s_j,\alpha} \cdot \nabla_i p_{s_i,\alpha}) &:= \mathbf{(1)} \\
+(\nabla_i p_{s_j,\alpha} \cdot p_{s_i,\beta}) + (p_{s_j,\alpha} \cdot \nabla_i p_{s_i,\beta}) & := \mathbf{(2)} \\
+(\nabla_i p_{s_j,\beta} \cdot p_{s_i,\alpha}) + (p_{s_j,\beta} \cdot \nabla_i p_{s_i,\alpha}) & := \mathbf{(3)} \\
+(\nabla_i p_{s_j,\beta} \cdot p_{s_i,\beta}) + (p_{s_j,\beta} \cdot \nabla_i p_{s_i,\beta}) & := \mathbf{(4)} 
+\end{align}
+\textit{CASE 1: Two states with same potential parameters}	Case 1 is applied to the system with two states with its state probability, but has same potential parameter (e.g. same LJ parameters). This case can be regarded as a system of uniform potential, but has some system mixing among particles. Thus, in this case, there is no state dependency on the potentials, i.e.  $ u_{\alpha, \alpha} (r_{ij}) =  u_{\alpha, \beta} (r_{ij}) =  u_{\beta, \beta} (r_{ij})=u(r_{ij})$.
+Furthermore, we know that $p_{s_i,\alpha} + p_{s_i,\beta}= p_{s_j,\alpha} + p_{s_j,\beta} = 1$, $\nabla_i p_{s_i,\alpha} = - \nabla_i p_{s_i,\beta}$ and $\nabla_i p_{s_j,\alpha} = - \nabla_i p_{s_j,\beta}$, the summation can be reduced as 
+\begin{align} \notag
+\mathbf{(1)}+\mathbf{(2)}+\mathbf{(3)}+\mathbf{(4)} &= \Biggl( \bigl(\nabla_i p_{s_j,\alpha} \cdot p_{s_i,\alpha}\bigr) + \bigl(p_{s_j,\alpha} \cdot \nabla_i p_{s_i,\alpha}\bigr) + \bigl(\nabla_i p_{s_j,\alpha} \cdot (1-p_{s_i,\alpha})\bigr)  \\ \notag
+& \quad \quad \,+ \bigl(p_{s_j,\alpha} \cdot (-\nabla_i p_{s_i,\alpha})\bigr) + \bigl((-\nabla_i p_{s_j,\alpha}) \cdot p_{s_i,\alpha}\bigr) + \bigl((1-p_{s_j,\alpha}) \cdot \nabla_i p_{s_i,\alpha}\bigr) \\ \notag
+& \quad \quad \, + \bigl((-\nabla_i p_{s_j,\alpha}) \cdot (1-p_{s_i,\alpha})\bigr) + \bigl((1-p_{s_j,\alpha}) \cdot (-\nabla_i p_{s_i,\alpha})\bigr)\Biggr) u(r_{ij})\\ \notag
+& = \Bigl(\nabla_i p_{s_j,\alpha} - \nabla_i p_{s_j,\alpha} \cdot p_{s_i,\alpha} +  \nabla_i p_{s_i,\alpha} - \nabla_i p_{s_i,\alpha} \cdot p_{s_j,\alpha} \\ \notag
+& \quad \,- \nabla_i p_{s_j,\alpha} + \nabla_i p_{s_j,\alpha} \cdot p_{s_i,\alpha} -  \nabla_i p_{s_i,\alpha} + \nabla_i p_{s_i,\alpha} \cdot p_{s_j,\alpha} \Bigr) u(r_{ij})\\ \notag
+& = 0
+\end{align}
+Similarly, $\sum_{j=i,k\neq j} \mathbb{C}_{ijk} = \sum_{j\neq i} \mathbb{C}_{ijk} = 0 $. Therefore, there is no effective mixing effect for the uniform potential case. \\
+
+\noindent
+\textit{CASE 2: Two states with different potential parameters} In this case, the two body term can be survived due to $u_{\alpha, \alpha} (r_{ij}) \neq u_{\alpha, \beta} (r_{ij}) \neq  u_{\beta, \beta} (r_{ij})$ and by mixing law, only $u_{\alpha, \beta} (r_{ij}) = u_{\beta, \alpha} (r_{ij})$. However, this inter-state term is not vanished, see below.
+\begin{align} \notag
+\Bigl(\mathbf{(2)}+\mathbf{(3)}\Bigr) &= \Bigl( \bigl(\nabla_i p_{s_j,\alpha} \cdot (1-p_{s_i,\alpha})\bigr) + \bigl(p_{s_j,\alpha} \cdot (-\nabla_i p_{s_i,\alpha})\bigr) + \bigl((-\nabla_i p_{s_j,\alpha}) \cdot p_{s_i,\alpha}\bigr) + \bigl((1-p_{s_j,\alpha}) \cdot \nabla_i p_{s_i,\alpha}\bigr) \Bigr) \\ \notag
+&= \Bigl( \nabla_i p_{s_j,\alpha} -p_{s_i,\alpha} \cdot \nabla_i p_{s_j,\alpha} - p_{s_j,\alpha} \cdot \nabla_i p_{s_i,\alpha}+  \nabla_i p_{s_i,\alpha} \\ \notag
+& \quad \, -p_{s_j,\alpha} \cdot \nabla_i p_{s_i,\alpha}- \nabla_i p_{s_j,\alpha} + p_{s_i,\alpha} \cdot \nabla_i p_{s_j,\alpha} \Bigr) \cdot u_{\alpha,\beta}(r_{ij}) \\ \notag
+&= \Bigl( \nabla_i p_{s_i, \alpha} - 2 p_{s_j,\alpha} \cdot \nabla_i p_{s_i,\alpha} \Bigr) \cdot u_{\alpha,\beta}(r_{ij}) \\ \notag
+&= \Bigl (\nabla_i p_{s_i,\alpha}(1-2p_{s_j,\alpha})\Bigr)\cdot u_{\alpha,\beta}(r_{ij}) \\
+&=  {\color{blue}\nabla_i p_{s_i,\alpha}} \times (1-2p_{s_j,\alpha}) \times  u_{\alpha,\beta}(r_{ij})
+\end{align}
+Furthermore, plugging the probability and its derivative definition, it gives
+\begin{align}
+\textbf{(LHS)} &= {\color{blue} - \frac{\textrm{sech}^2 \bigl( \frac{w_i-c}{0.1c} \bigr)  }{0.0004c\cdot r_{cut}} \times \Biggl( \sum_j \textrm{sech}^2 \bigl(\frac{r_{ij}-r_{cut}}{0.001r_{cut}}\bigr) \Biggr) \times \Big[\frac{\Delta x}{r_{ij}}, \frac{\Delta y}{r_{ij}}, \frac{\Delta x}{r_{ij}}\Big]} \times \Bigl(-\textrm{tanh} \bigl(\frac{w_j-c}{0.1c}\bigr)\Bigr) \times u_{\alpha,\beta}(r_{ij}) \\
+&=\frac{ \textrm{tanh}\bigl(\frac{w_j-c}{0.1c}\bigr) \cdot \textrm{sech}^2 \bigl( \frac{w_i-c}{0.1c} \bigr)  }{0.0004c\cdot r_{cut}} \times \Biggl( \sum_j \textrm{sech}^2 \bigl(\frac{r_{ij}-r_{cut}}{0.001r_{cut}}\bigr) \Biggr) \times \frac{u_{\alpha,\beta}(r_{ij})}{r_{ij}} \Big[\Delta x, \Delta y, \Delta z\Big]
+\end{align}
+which doesn't reduced into simple expressions. 
+\subsubsection{Three particles interaction term}
+For the three-particle interaction term, 
+The first summation term,
+\begin{align}
+ \sum_{\substack{j \in N(i;r_{cut}) \\ k \notin N(i;r_{cut})}} \mathbb{C}_{ijk} = \sum_{\substack{j \in N(i;r_{cut}) \\ k \notin N(i;r_{cut})}} \sum_{\alpha \beta} \Biggl( (\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\beta}) + (p_{s_j,\alpha} \cdot \nabla_i p_{s_k,\beta}) \Biggr) \cdot u_{\alpha \beta} (r_{ij})
+\end{align}
+Since $k \notin N(i;r_{cut})$, $\nabla_i P_{s_k, \alpha/\beta} = 0 $, thus
+\begin{align} \notag
+\textbf{(LHS)} &= \sum_{\substack{j \in N(i;r_{cut}) \\ k \notin N(i;r_{cut})}} \sum_{\alpha\beta} (\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\beta}) \cdot u_{\alpha \beta} (r_{ij})\\
+ &= \sum_{\substack{j \in N(i;r_{cut}) \\ k \notin N(i;r_{cut})}}   \Biggl( (\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\alpha}) u_{\alpha \alpha} +(\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\beta}) u_{\alpha \beta} +(\nabla_i p_{s_j,\beta} \cdot p_{s_k,\alpha}) u_{\beta \alpha} +(\nabla_i p_{s_j,\beta} \cdot p_{s_k,\beta}) u_{\beta \beta}  \Biggr) \notag \\ \notag
+ &= \sum_{\substack{j \in N(i;r_{cut}) \\ k \notin N(i;r_{cut})}}   \Biggl(  (\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\alpha}) u_{\alpha \alpha} +  (\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\beta}) u_{\alpha \beta} \\
+ & \qquad  \qquad \qquad \, +(-\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\alpha}) u_{\beta \alpha} + (-\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\beta})u_{\beta \beta}  \Biggr) \notag \\
+ &= \sum_{\substack{j \in N(i;r_{cut}) \\ k \notin N(i;r_{cut})}}   \Biggl(  (\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\alpha}) \times \Bigl(u_{\alpha \alpha}-u_{\alpha \beta}\Bigr) +  (\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\beta}) \times \Bigl(u_{\alpha \beta} -u_{\beta \beta}\Bigr) \Biggr) \notag 
+\end{align}
+\textit{Note:} The equation above is the most reduced form. One can write it down much in detail by using $p_{s_k,\alpha}+p_{s_k,\beta} = 1$, but that expression can only give following terms:
+\begin{align*}
+\textbf{(LHS)} =  \sum_{\substack{j \in N(i;r_{cut}) \\ k \notin N(i;r_{cut})}}  \Biggl( \nabla_i p_{s_j,\alpha} \Bigl( p_{s_k,\alpha} \bigl( u_{\alpha \alpha} -2 u_{\alpha \beta} + u_{\beta \beta} \bigr) +u_{\alpha \beta} -u_{\beta \beta} \Bigr) \Biggr)
+\end{align*}
+
+Likewise, the second summation term is followed as equation below due to $\nabla_i P_{s_j, \alpha/\beta} = 0 $ ($\because j \notin N(i;r_{cut})$)
+\begin{align}
+ \sum_{\substack{j \notin N(i;r_{cut}) \\ k \in N(i;r_{cut})}} \mathbb{C}_{ijk} &=\sum_{\substack{j \notin N(i;r_{cut}) \\ k \in N(i;r_{cut})}} \sum_{\alpha\beta} (p_{s_j,\alpha} \cdot \nabla_i  p_{s_k,\beta}) \cdot u_{\alpha \beta} (r_{ij}) \\
+& =   \sum_{\substack{j \notin N(i;r_{cut}) \\ k \in N(i;r_{cut})}}   \Biggl(  (p_{s_j,\alpha} \cdot \nabla_i p_{s_k,\alpha}) \times \Bigl(u_{\alpha \alpha}-u_{\alpha \beta}\Bigr) +  (p_{s_j,\alpha} \cdot \nabla_i p_{s_k,\beta}) \times \Bigl(u_{\alpha \beta} -u_{\beta \beta}\Bigr) \Biggr) \notag 
+\end{align}
+The last summation term has both two terms:
+\begin{align}
+ \sum_{\substack{j \in N(i;r_{cut}) \\ k \in N(i;r_{cut})}} \mathbb{C}_{ijk} = \sum_{\substack{j \in N(i;r_{cut}) \\ k \in N(i;r_{cut})}} \Biggl( (\nabla_i p_{s_j,\alpha} \cdot p_{s_k,\beta}) + (p_{s_j,\alpha} \cdot \nabla_i p_{s_k,\beta}) \Biggr)
+ \end{align}
+ \section{Implementation}
+ \subsection{Final force expression}
+ From above discussion, the force acting on the particle $i$, $\mathbf{f_i}$ can be expressed as below equation. For the sake of the clarity, use $\color{blue} N(i) := N(i;r_{cut})$. Also, it is obvious that if $j \in N(i)$ then, $j \neq i$. In the equation below, I didn't fully write down the $\sum_{\alpha} \, \sum_{\alpha \beta}$ terms, but one can relate each subforce term with from previous sections.
+ \begin{align} \notag
+ \mathbf{f}_i =& -\Biggl( \sum_\alpha(\nabla_i p_{s_i,\alpha})\cdot(\mu_\alpha-kT \ln p_{s_i,\alpha}) +\sum_{j \in N(i)}\sum_\alpha \nabla_i p_{s_j,\alpha} \cdot (\mu_\alpha-kT \ln p_{s_j,\alpha})\Biggr) \\ \notag
+ &-\Biggl( \sum_{j \in N(i)} \sum_{\alpha \beta} p_{s_i,\alpha}p_{s_j,\beta} \cdot \nabla_i u_{\alpha\beta} \Biggr) \\ \notag
+ & - \Biggl( \Big\{ \sum_{j \in N(i)}  \sum_{\alpha \beta} \bigl( \nabla_i p_{s_i,\alpha} p_{s_j,\beta}+  p_{s_i,\alpha} \nabla_i p_{s_j,\beta} \bigr) \cdot u_{\alpha \beta} \Big\} \\ \notag
+ & \qquad+ \Big\{\Bigl( \sum_{\substack{j \notin N(i) \\ k \in N(i)}} \sum_{\alpha \beta} \bigl( p_{s_j,\alpha} \nabla_i p_{s_k,\beta} \bigr) + \sum_{\substack{j \in N(i) \\ k \notin N(i)}} \sum_{\alpha \beta} \bigl( \nabla_ip_{s_j,\alpha}  p_{s_k,\beta} \bigr)+ \sum_{\substack{j \in N(i) \\ k \in N(i)}} \sum_{\alpha \beta} \bigl(p_{s_j,\alpha} \nabla_i p_{s_k,\beta} \\ \notag
+& \qquad \qquad+ \nabla_ip_{s_j,\alpha}  p_{s_k,\beta} \bigr) \Bigr)  \cdot u_{\alpha\beta}\Big\} \Biggr)  \\ \notag
+  \end{align}
+From above equation, $\Biggl(\Biggr)$ denote the first, second and third subforce terms and parenthesis $\Big\{\Big\}$ shows that the two-particle term and three-particle term in the third subforce term. (See the summation index.)
+  \subsection{three particle interaction}
+ To consider three particles $i,\,j,\,k$, following figure shows the implementation to LAMMPS.
+ \begin{center}
+\includegraphics[width=3.5in]{ijk_diagram.png} \\
+\textbf{Figure 5}: Three particles pairs $i,\,j,\,k$ from an enhanced cutoff $2\times r_{cut}$ 
+\end{center}
+\begin{itemize}
+\item{$\mathbf{r_{ij}}$: To calculate the distance to determine $j \in N(i;r_{cut})$}
+\item{$\mathbf{r_{jk}}$: To calculate the distance to determine $k \in N(j;r_{cut})$}
+\item{$\mathbf{r_{ik}}$: To calculate the distance to determine $k \in N(i;r_{cut})$ or $k \notin N(i;r_{cut})$}
+\end{itemize}
+\subsection{Case study}
+\subsubsection{Case 1: i--j1--k1}
+From Figure 5, $r_{ij1} < r_{cut}$, $r_{j1k1} < r_{cut}$, and $r_{ik1} < r_{cut}$. Thus the neighboring interaction is $j1 \in N(i;r_{cut})$, and $k1 \in N(j1;r_{cut})$ and $k1 \in N(i;r_{cut})$, which is \textbf{valid} $ijk$ pair.
+\subsubsection{Case 2: i--j1--k2}
+From Figure 5, $r_{ij1} < r_{cut}$, $r_{j1k2} < r_{cut}$, and $r_{ik2} > r_{cut}$. Thus the neighboring interaction is $j1 \in N(i;r_{cut})$, and $k2 \in N(j1;r_{cut})$ and $\color{red}k2 \notin N(i;r_{cut})$, which is \textbf{valid} $ijk$ pair.
+\subsubsection{Case 3: i--j1--k3}
+From Figure 5, $r_{ij1} < r_{cut}$, $\color{red} r_{j1k3} > r_{cut}$, and $r_{ik1} < r_{cut}$. Thus the neighboring interaction is $j1 \in N(i;r_{cut})$, and $\color{red} k3 \notin N(j1;r_{cut})$ and $k3 \notin N(i;r_{cut})$, which is {\color{red} \textbf{invalid}} $ijk$ pair.
+\subsubsection{Case 4: i--j2--k1}
+From Figure 5, $\color{red} r_{ij2} > r_{cut}$, $r_{j2k1} > r_{cut}$, and $r_{ik1} < r_{cut}$. Thus the neighboring interaction is $\color{red} j2 \notin N(i;r_{cut})$, and $ k1 \in N(j2;r_{cut})$ and $k1 \in N(i;r_{cut})$, which is {\color{red} \textbf{invalid}} $ijk$ pair.
+
+\subsection{LAMMPS routine}
+Therefore, from above sections, one can decompose the $\mathbf{f}_i$ component as below.
+\begin{center}
+\includegraphics[width=5.5in]{force_decomposition.png} \\
+\textbf{Figure 6}: Force decomposition into four parts
+\end{center}
+However, it is worth examining the \textbf{(4)-1} and \textbf{(4)-2} terms. 
+\begin{center}
+\includegraphics[width=4.5in]{jk_neigh.png} \\
+\textbf{Figure 7}: (4)-1 and (4)-2 sub force terms
+\end{center}
+To implement this, from, section 3.2, the subroutine \textit{Compute} in pair style can be composed of these two for loops.
+ \begin{center}
+ From Figure 7, the two cases, (4)-1 and (4)-2 are equivalent. The only difference is the $j$ and $k$ indices. Thus, to avoid the double counting, we only consider (4)-1 term in the actual code. 
+\includegraphics[width=2.2in]{subroutine.png} \\
+\textbf{Figure 7}: Force calculating subroutine
+\end{center}
+\subsection{Comments on the number function}
+From above section, number function is defined as 
+\begin{align*}
+w_i &= \sum_j  \frac{1}{2} \Biggl(1-\textrm{tanh}(\frac{r_{ij} - r_{cut}}{0.001 \cdot r_{cut}}) \Biggr)\\
+&=\color{blue} \sum_j \ w_{ij}
+\end{align*}
+The factor 0.001 in the denominator is chosen to get the $w_{ij}$ value near to 1 if $r_{ij} < r_{cut}$. See the behavior of the $w_{ij}$ function by changing the multiplying factor, Figure 8.
+\begin{center}
+\includegraphics[width=2.5in]{factor.png} \\
+\textbf{Figure 8}: Factor dependency of $w_{ij}$ value
+\end{center}
+However, this factor is appeared in the force expression as reciprocal manner. In the $\nabla_i P_{s_i}$ and $\nabla_i P_{s_j}$ part, 
+\begin{align}
+\nabla_i p_{s_j,\alpha/\beta} &= \mp \frac{\textrm{sech}^2 \bigl( \frac{w_j-c}{0.1c} \bigr)  }{{\color{blue}0.0004c}\cdot r_{cut}} \times \textrm{sech}^2 \bigl(\frac{r_{ij}-r_{cut}}{0.001r_{cut}}\bigr)  \times \Big[\frac{\Delta x}{r_{ij}}, \frac{\Delta y}{r_{ij}}, \frac{\Delta x}{r_{ij}}\Big]  \\
+\nabla_i {P_{s_i,\alpha/\beta}}  &= \mp \frac{\textrm{sech}^2 \bigl( \frac{w_i-c}{0.1c} \bigr)  }{{\color{blue}0.0004c}\cdot r_{cut}} \times \Biggl( \sum_j \textrm{sech}^2 \bigl(\frac{r_{ij}-r_{cut}}{0.001r_{cut}}\bigr) \Biggr) \times \Big[\frac{\Delta x}{r_{ij}}, \frac{\Delta y}{r_{ij}}, \frac{\Delta x}{r_{ij}}\Big] 
+\end{align}
+Since $\frac{1}{0.0004} = 2500$, by changing the factor 0.001 to 0.1 will decrease the derivatives by the scale of 100. Also, it is worth mentioning that the behavior of the $\textrm{sech}^2$ function is affected by the factor.
+\begin{center}
+\includegraphics[width=2.5in]{sech.png} \\
+\textbf{Figure 9}: Factor dependency of $\textrm{sech}^2 \Bigl(\frac{r_{ij}-r_{cut}}{\textit{factor}\times r_{cut}}\Bigr)$ value
+\end{center}
+\subsection{Comments on the probability function}
+Also, the state probability function is defined as below:
+\begin{align*}
+P_{i,a} = {+ \frac{1}{2}\bigl(  \textrm{tanh}(\frac{w_i - c}{0.1c}) + 1 \bigr) }\\
+P_{i,b} = {- \frac{1}{2} \bigl( \textrm{tanh}(\frac{w_i - c}{0.1c}) -1 \bigr)}
+\end{align*}
+This probability function is highly related with the first subforce term by following formula. (set $\mu_{\alpha/ \beta} = 0$)
+\begin{align*}
+  \mathbf{f}_i^{(1)} =& \Biggl( \sum_\alpha(\nabla_i p_{s_i,\alpha})\cdot(kT \ln p_{s_i,\alpha}) +\sum_{j \in N(i)}\sum_\alpha \nabla_i p_{s_j,\alpha} \cdot (kT \ln p_{s_j,\alpha})\Biggr) 
+  \end{align*}
+If temperature is setted up as 300.0 K, the kT value is 0.596162, so that $kT \ln(p_{s_i,\alpha}) = kT \ln \Bigl(+\frac{1}{2}\bigl(\textrm{tanh}(\frac{w_i-c}{0.1c})+1\bigr)\Bigr)$ determines the first subforce part. \\ \noindent
+However, for some cases, the mixing is not fully achieved, ended up with obtaining $p \approx 0$ so that $\mathbf{f}_i^{(1)} \rightarrow \infty$ for some cases. Therefore, to ensure the simulation converges to the right physical model, we firstly turned off the first subforce term. All the results discussed in the another document is about the case when the first subforce term is turned off.
+\end{document}
