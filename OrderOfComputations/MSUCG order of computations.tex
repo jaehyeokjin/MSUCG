@@ -1,0 +1,36 @@
+\documentclass[11pt, oneside]{article}   	% use "amsart" instead of "article" for AMSLaTeX format
+\usepackage{geometry}                		% See geometry.pdf to learn the layout options. There are lots.
+\geometry{letterpaper}                   		% ... or a4paper or a5paper or ... 
+%\geometry{landscape}                		% Activate for for rotated page geometry
+%\usepackage[parfill]{parskip}    		% Activate to begin paragraphs with an empty line rather than an indent
+\usepackage{graphicx}				% Use pdf, png, jpg, or eps§ with pdflatex; use eps in DVI mode
+								% TeX will automatically convert eps --> pdf in pdflatex		
+\usepackage{amssymb}
+\usepackage{amsmath}
+
+\title{A different calculation scheme for probability-dependent interaction calculation}
+\author{James Dama}
+
+\begin{document}
+\maketitle
+
+Assume that one has a potential that can be written in the following form:
+\begin{align}
+U =  U(\{\mathbf{r}_i\}) = U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})
+\end{align}
+where $\{p_i\}$ is a set of per-particle probabilities of occupying a given state. In our case, the probabilities are a function of the local neighborhood and can be calculated using a normal pair neighbor list.
+
+Then, the forces due to this can be calculated all at once, i.e., 
+\begin{align}
+\nabla U &=  \nabla U(\{\mathbf{r}_i\}) = \nabla U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) \\
+\end{align}
+and in our special case this has four subforce terms that are very common. 
+
+But it can also be done in a few-step procedure, like so:
+\begin{align}
+\nabla U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) &= \nabla U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) |_{\{p_i(\{\mathbf{r}_j\})\}} + \sum_i \frac{d U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})}{d p_i} |_{\{\mathbf{r}_j\}} \nabla p_i(\{\mathbf{r}_j\})
+\end{align}
+
+The advantage of this is that it is very simple to program in an extensible manner. First, calculate the $\{p_i(\{\mathbf{r}_j\})\}$ in one neighbor loop. Then, calculate $\nabla U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) |_{\{p_i(\{\mathbf{r}_j\})\}}$ and $\sum_i \frac{d U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})}{d p_i} |_{\{\mathbf{r}_j\}}$ in a second neighbor loop. Finally, calculate $\{ \nabla p_i(\{\mathbf{r}_j\}) \}$ in a third neighbor loop.
+
+\end{document}  

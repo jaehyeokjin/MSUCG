@@ -245,20 +245,36 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 	// First Loop: Calculate W(i)
 
   	int nall = nlocal + atom->nghost;
-	if(nall > nmax)
+	// Allocate force calculation memory.
+    if(nall > nmax)
   	{
     	nmax = nall;
     	memory->grow(W, nall, "pair/msucg:W");
     	memory->grow(dW, nall, 3, "pair/msucg:dW");
     	memory->grow(U, nall, "pair/msucg:U");
     	/* Subforce initialization */
+        // subforce_1 is the 1-body entropic force.
     	memory->grow(subforce_1, nall, 3, "pair/msucg:subforce_1");
+        // subforce_2 is the constant-state-occupation force.
     	memory->grow(subforce_2, nall, 3, "pair/msucg:subforce_2");
+        // subforce_3 is the change-in-state-occupation force between
+        // directly interacting particles.
     	memory->grow(subforce_3, nall, 3, "pair/msucg:subforce_3");
+        // subforce_4 is the change-in-state-occupation force between
+        // indirectly interacting particles.
     	memory->grow(subforce_4, nall, 3, "pair/msucg:subforce_4");
+        // All of these are added together into the totalforce.
     	memory->grow(totalforce, nall, 3, "pair/msucg:totalforce");
+
+        // Suggestion for alternate intermediate vars, using the three-step
+        // scheme I described earlier and in the "MSUCG order of computations" 
+        // document.
+        // memory->grow(probabilities, nall, (number_of_states - 1), "pair/msucg:probabilities");
+        // memory->grow(probability_ders, nall, (number_of_states - 1), "pair/msucg:probabilities");
+        // memory->grow(totalforce, nall, 3, "pair/msucg:totalforce");
   	}	
 
+    // Set all of the force calculation temporaries to zero.
   	for(int i=0; i<nall; i++)
   	{
   		W[i] = dW[i][0] = dW[i][1] = dW[i][2] = U[i] = 0.0;
@@ -269,6 +285,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
   		totalforce[i][0] = totalforce[i][1] = totalforce[i][2] = 0.0;
  	}
 
+    // Loop over all particles.
   	for (ii = 0; ii < inum; ii++){
   		i = ilist[ii];
   		xtmp = x[i][0];
@@ -294,6 +311,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 	countiter += 1;
 	}
 	} */
+        // Loop over all neighbors of the particle.
 		for (jj = 0; jj < jnum; jj++) {
 			j = jlist[jj];
 			delx = xtmp - x[j][0];
