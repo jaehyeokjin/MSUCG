@@ -16,21 +16,41 @@
 
 Assume that one has a potential that can be written in the following form:
 \begin{align}
-U =  U(\{\mathbf{r}_i\}) = U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})
+U =  U(\{\mathbf{r}_i\}) = U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})
 \end{align}
 where $\{p_i\}$ is a set of per-particle probabilities of occupying a given state. In our case, the probabilities are a function of the local neighborhood and can be calculated using a normal pair neighbor list.
 
-Then, the forces due to this can be calculated all at once, i.e., 
+The set of forces on all particles due to this potential is found from calculations of the derivatives
 \begin{align}
-\nabla U &=  \nabla U(\{\mathbf{r}_i\}) = \nabla U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) \\
+\nabla U &=  \nabla U(\{\mathbf{r}_i\}) = \nabla U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) \\
 \end{align}
-and in our special case this has four subforce terms that are very common. 
-
-But it can also be done in a few-step procedure, like so:
+which can be rewritten using the chain rule as
 \begin{align}
-\nabla U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) &= \nabla U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) |_{\{p_i(\{\mathbf{r}_j\})\}} + \sum_i \frac{d U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})}{d p_i} |_{\{\mathbf{r}_j\}} \nabla p_i(\{\mathbf{r}_j\})
+\nabla U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) &= \nabla U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) |_{\{p_{i, \alpha}(\{\mathbf{r}_j\})\}} + \sum_{i, \alpha} \frac{d U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})}{d p_{i, \alpha}} |_{\{\mathbf{r}_j\}} \nabla p_{i, \alpha}(\{\mathbf{r}_j\})
 \end{align}
 
-The advantage of this is that it is very simple to program in an extensible manner. First, calculate the $\{p_i(\{\mathbf{r}_j\})\}$ in one neighbor loop. Then, calculate $\nabla U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) |_{\{p_i(\{\mathbf{r}_j\})\}}$ and $\sum_i \frac{d U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})}{d p_i} |_{\{\mathbf{r}_j\}}$ in a second neighbor loop. Finally, calculate $\{ \nabla p_i(\{\mathbf{r}_j\}) \}$ in a third neighbor loop.
+There are two ways to consider evaluating this. One is to carry through the derivatives, group terms, and then look for algebraic structure in the result that can simplify the calculation. For instance, when $p_i(\{\mathbf{r}_j\})$ is a function of a local density measured as a sum of pairwise proximity functions with finite range,
+\begin{align}
+p_i(\{\mathbf{r}_j\}) = p_i( \rho_i(\{\mathbf{r}_j\}) ) \\
+\rho_i(\{\mathbf{r}_j\}) = \sum_{j \neq i} w( r_{ij} ) \\
+\end{align}
+then the sum is the same whether it's a sum over all particles or just any set of neighbors that contains all particles within the cutoff of $w(r)$
+\begin{align}
+\sum_{j \neq i} w( r_{ij} ) = \sum_{j \text{ neigh } i} w( r_{ij} )
+\end{align}
+and the derivative of $p_i$ with respect to the position of any particle $k$ is therefore zero unless $k$ is a neighbor of $i$. Therefore, with a one-body potential plus finite range pair potential in each state, Eq. 4 above can be rewritten
+\begin{align}
+\nabla U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) &= \nabla U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) |_{\{p_{i, \alpha}(\{\mathbf{r}_j\})\}} + \sum_{i, \alpha} \frac{d U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})}{d p_{i, \alpha}} |_{\{\mathbf{r}_j\}} \nabla p_{i, \alpha}(\{\mathbf{r}_j\}) \\
+&= \frac{1}{2} \sum_{i, j \text{ neigh } i, \alpha, \beta} p_{i, \alpha} p_{j, \beta} \nabla u_{\alpha\beta}(r_{ij}) + \sum_{i, \alpha} \frac{d U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})}{d p_{i, \alpha}} |_{\{\mathbf{r}_j\}} \nabla p_{i, \alpha}(\{\mathbf{r}_j\}) \\
+&=  \frac{1}{2} \sum_{i, j \text{ neigh } i, \alpha, \beta} p_{i, \alpha} p_{j, \beta} \nabla u_{\alpha\beta}(r_{ij}) + \sum_{i, \alpha} \frac{du_\alpha(p_{i, \alpha})}{d p_{i, \alpha}} \nabla p_{i, \alpha}(\{\mathbf{r}_j\})  +  \ldots \notag \\  & \qquad \ldots + \sum_{i, \alpha} \frac{d U_{\text{pair}}(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})}{d p_{i, \alpha}} |_{\{\mathbf{r}_j\}} \nabla p_{i, \alpha}(\{\mathbf{r}_j\}) \\
+&= \frac{1}{2} \sum_{i, j \text{ neigh } i, \alpha, \beta} p_{i, \alpha} p_{j, \beta} \nabla u_{\alpha\beta}(r_{ij}) + \sum_{i, \alpha} \frac{du_\alpha(p_{i, \alpha})}{d p_{i, \alpha}} \nabla p_{i, \alpha}(\{\mathbf{r}_j\})  +  \ldots \notag \\  & \qquad \ldots + \sum_{i, \alpha} \frac{d \frac{1}{2} \sum_{j, k \text{ neigh } j, \beta, \gamma} p_{j, \beta} p_{k, \gamma} u_{\beta\gamma}(r_{jk})}{d p_{i, \alpha}} |_{\{\mathbf{r}_l\}} \nabla p_{i, \alpha}(\{\mathbf{r}_l\}) \\
+&= \frac{1}{2} \sum_{i, j \text{ neigh } i, \alpha, \beta} p_{i, \alpha} p_{j, \beta} \nabla u_{\alpha\beta}(r_{ij}) + \sum_{i, \alpha} \frac{du_\alpha(p_{i, \alpha})}{d p_{i, \alpha}} \nabla p_{i, \alpha}(\{\mathbf{r}_j\})  +  \ldots \notag \\  & \qquad \ldots + \sum_{i, j \text{ neigh } i, \alpha, \beta} p_{j, \beta} u_{\alpha\beta}(r_{ij}) \nabla p_{i, \alpha}(\{\mathbf{r}_l\})
+\end{align}
+and, recognizing that $\nabla p_{i, \alpha}(\{\mathbf{r}_l\})$ is another pair list sum, we see that the first two terms are simple pair computations but the last requires a twice nested pair list sum. In this equation, the first term is Jaehyeok's 4-2, the second is his 4-1, and the third includes both 4-3 and 4-4. Furthermore, since computing the probabilities is itself a neighbor calculation, either there must be an initial pair list traversal to calculate each of these, or to calculate all of the terms above one must invoke a local neighborhood computation for every term in every one of the pair lists, effectively nesting the pair list traversal one level deeper.
+
+However, there is a simpler, more elegant way to do this based on first computing the $p_{i, \alpha}(\{\mathbf{r}_j\})$, then the $\nabla U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) |_{\{p_{i, \alpha}(\{\mathbf{r}_j\})\}}$ and $\frac{d U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})}{d p_{i, \alpha}} |_{\{\mathbf{r}_j\}}$, and then the 
+$\nabla p_{i, \alpha}(\{\mathbf{r}_l\})$. In this case, that amounts to three pair list traversals in sequence. There is no need for nested loops or for modifying the definition of the neighborlist to include neighbors once-removed, as in Jaehyeok's current code.
+
+This is more elegant to me in even just this one simple case. However, the power of this approach becomes much more apparent when considering more general probabilities and changes in the probabilities. This scheme separates the state-specific potential computations from the state probability calculations entirely, so that both may be programmed independently. This enables much more flexible work, and much greater code re-use. One could concevably use identical state probability implementations across pair and pair \& few-body-topology force fields, and each state-dependent potential class like pairs or pairs \& angles would only need to be programmed once in order to use any state probability definition or implementation.
 
 \end{document}  
