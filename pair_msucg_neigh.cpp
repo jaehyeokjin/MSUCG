@@ -96,12 +96,10 @@ PairMSUCG_NEIGH::~PairMSUCG_NEIGH()
 double PairMSUCG_NEIGH::P(int type, int state, double *x, double *f, double w, double *uval, int single)
 {
 
-  if(type==1)
-  {
     double p = 0.5 * (tanh((w - p_constant)/(0.1 * p_constant))+1);
     double factor_p = 1.0/(0.04 * p_constant * sigma_cutoff) * (1.0 - pow(tanh((w - p_constant)/(0.1 * p_constant)), 2.0));
 
-    if(state==1)
+    if(state==1 || state==3)
     {
       if(single == 0)
       {
@@ -118,7 +116,7 @@ double PairMSUCG_NEIGH::P(int type, int state, double *x, double *f, double w, d
         return p;
       }
     }
-    else if(state==2)
+    else if(state==2 || state==4)
     {
       if(single == 0)
       {
@@ -135,8 +133,6 @@ double PairMSUCG_NEIGH::P(int type, int state, double *x, double *f, double w, d
         return 1.0-p;
       }
     }
-    else error->one(FLERR, "Wrong type");
-  }
   else error->one(FLERR, "Wrong type");
 }
 
@@ -213,19 +209,20 @@ void PairMSUCG_NEIGH::unpack_forward_comm(int n, int first, double *buf)
 void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 {
 	int i,j,k,ii,jj,kk,inum,jnum,itype,jtype,ktype;
-	double xtmp,ytmp,ztmp,delx,dely,delz,evdwl,fpair;
+	double xtmp,ytmp,ztmp,delx,dely,delz,evdwl,evdwl_jk_1,evdwl_jk_2,fpair;
 	double rsq,r2inv,r6inv,forcelj,factor_lj;
 	/* Additional parameter */
 	double rsqik, rsqjk, r2jkinv, r6jkinv, r2ikinv, r6ikinv, ffactor_jk;
 	double deljkx, deljky, deljkz, delikx, deliky, delikz;
 	double sech_one, sech_one_k, sech_one_j;
 	int *ilist,*jlist,*klist,*numneigh,**firstneigh;
+	double p_print;
 	double w_value, u_coef;
 	/* Final force routine */
   	double pair_force; // For updating in the ev_tally routine
   	double energy_lj; // Energy routine for ev_tally routine
   	/*  = (double *)malloc(sizeof(double)*3) */
-  	evdwl = 0.0;
+  	evdwl = evdwl_jk_1 = evdwl_jk_2 = 0.0;
   	if (eflag || vflag) ev_setup(eflag,vflag);
   	else evflag = vflag_fdotr = 0;
 
@@ -245,36 +242,20 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 	// First Loop: Calculate W(i)
 
   	int nall = nlocal + atom->nghost;
-	// Allocate force calculation memory.
-    if(nall > nmax)
+	if(nall > nmax)
   	{
     	nmax = nall;
     	memory->grow(W, nall, "pair/msucg:W");
     	memory->grow(dW, nall, 3, "pair/msucg:dW");
     	memory->grow(U, nall, "pair/msucg:U");
     	/* Subforce initialization */
-        // subforce_1 is the 1-body entropic force.
     	memory->grow(subforce_1, nall, 3, "pair/msucg:subforce_1");
-        // subforce_2 is the constant-state-occupation force.
     	memory->grow(subforce_2, nall, 3, "pair/msucg:subforce_2");
-        // subforce_3 is the change-in-state-occupation force between
-        // directly interacting particles.
     	memory->grow(subforce_3, nall, 3, "pair/msucg:subforce_3");
-        // subforce_4 is the change-in-state-occupation force between
-        // indirectly interacting particles.
     	memory->grow(subforce_4, nall, 3, "pair/msucg:subforce_4");
-        // All of these are added together into the totalforce.
     	memory->grow(totalforce, nall, 3, "pair/msucg:totalforce");
+  	}
 
-        // Suggestion for alternate intermediate vars, using the three-step
-        // scheme I described earlier and in the "MSUCG order of computations" 
-        // document.
-        // memory->grow(probabilities, nall, (number_of_states - 1), "pair/msucg:probabilities");
-        // memory->grow(probability_ders, nall, (number_of_states - 1), "pair/msucg:probabilities");
-        // memory->grow(totalforce, nall, 3, "pair/msucg:totalforce");
-  	}	
-
-    // Set all of the force calculation temporaries to zero.
   	for(int i=0; i<nall; i++)
   	{
   		W[i] = dW[i][0] = dW[i][1] = dW[i][2] = U[i] = 0.0;
@@ -285,7 +266,6 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
   		totalforce[i][0] = totalforce[i][1] = totalforce[i][2] = 0.0;
  	}
 
-    // Loop over all particles.
   	for (ii = 0; ii < inum; ii++){
   		i = ilist[ii];
   		xtmp = x[i][0];
@@ -311,9 +291,8 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 	countiter += 1;
 	}
 	} */
-        // Loop over all neighbors of the particle.
 		for (jj = 0; jj < jnum; jj++) {
-			j = jlist[jj];
+ 			j = jlist[jj];
 			delx = xtmp - x[j][0];
 			dely = ytmp - x[j][1];
 			delz = ztmp - x[j][2];
@@ -321,13 +300,16 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 			jtype = type[j];
 
 			if (rsq < 0.25 * cutsq[itype][jtype] && rsq > 0.0) {
+				/*
 				countneigh += 1;
-				double w_value = 1.0 - tanh((sqrt(rsq) - sigma_cutoff)/(0.1 * sigma_cutoff));
+				*/
+				double w_value = 0.5 * (1.0 - tanh((sqrt(rsq) - sigma_cutoff)/(0.1 * sigma_cutoff)));
 				W[i] += w_value;
 				double u_coef = 1.0 - pow(tanh((sqrt(rsq) - sigma_cutoff)/(0.1 * sigma_cutoff)),2.0);
 				double fx = u_coef * delx/sqrt(rsq);
 				double fy = u_coef * dely/sqrt(rsq);
 				double fz = u_coef * delz/sqrt(rsq);
+
 				U[i] += u_coef/sqrt(rsq);
 				dW[i][0] += fx;
 				dW[i][1] += fy;
@@ -355,7 +337,11 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
   	}
   	comm->reverse_comm_pair(this);
   	comm->forward_comm_pair(this);
-
+  	fprintf(screen,"S value print ptcle 1: %8.5E, %8.3E, %8.3E \n", dW[0][0], dW[0][1], dW[0][2]);
+  	fprintf(screen,"S value print ptcle 2: %8.3E, %8.3E, %8.3E", dW[1][0], dW[1][1], dW[1][2]);
+    /*
+    fprintf(screen,"S value print ptcle 3: %8.5E, %8.3E, %8.3E \n", dW[2][0], dW[2][1], dW[2][2]);
+    */    
 		/* W value check
 		  for (ii = 0; ii < inum; ii++) {
 		    i = ilist[ii];
@@ -391,160 +377,162 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 				alpha = type_linked[alpha];
 			}
 */
-			for (jj = 0; jj < jnum; jj++) {
-				energy_lj = 0.0;
-				pair_force = 0.0;
-				j = jlist[jj];
-				factor_lj = special_lj[sbmask(j)];
-				j &= NEIGHMASK;
+		for (jj = 0; jj < jnum; jj++) {
+			energy_lj = 0.0;
+			pair_force = 0.0;
+			j = jlist[jj];
+			factor_lj = special_lj[sbmask(j)];
+			j &= NEIGHMASK;
 
-				delx = xtmp - x[j][0];
-				dely = ytmp - x[j][1];
-				delz = ztmp - x[j][2];
-				rsq = delx*delx + dely*dely + delz*delz;
-				jtype = type[j];
+			delx = xtmp - x[j][0];
+			dely = ytmp - x[j][1];
+			delz = ztmp - x[j][2];
+			rsq = delx*delx + dely*dely + delz*delz;
+			jtype = type[j];
 
-				if (rsq < 0.25*cutsq[itype][jtype]) {
-    			/* i and j are in the reduced cutoff distance: neighbor */
-					r2inv = 1.0/rsq;
-					r6inv = r2inv*r2inv*r2inv;
+			if (rsq < 0.25*cutsq[itype][jtype]) {
+			/* i and j are in the reduced cutoff distance: neighbor */
+				r2inv = 1.0/rsq;
+				r6inv = r2inv*r2inv*r2inv;
 
-					int alpha = itype;
-					int beta  = jtype;
-					double pi, pj;
+				int alpha = itype;
+				int beta  = jtype;
+				double pi, pj;
 
-					while(alpha !=0)
+				while(alpha != 0)
+				{
+					if(alpha == 2){
+						beta = 1;
+					}
+					if(alpha == 4){
+						beta = 3;
+					}
+      				/* First subforce part from two particle interaction */
+      				/*
+					double ffj_one[3];
+					double pj_one = P(jtype, beta, x[j], ffj_one, W[j], dW[j], 1);
+					double sech_one = 1.0 - pow(tanh((sqrt(rsq) - sigma_cutoff)/(0.1 * sigma_cutoff)),2.0);
+					subforce_1[i][0] += kT * log(pj_one) * ffj_one[0] * sech_one * delx/sqrt(rsq);
+					subforce_1[i][1] += kT * log(pj_one) * ffj_one[1] * sech_one * dely/sqrt(rsq);
+					subforce_1[i][2] += kT * log(pj_one) * ffj_one[2] * sech_one * delz/sqrt(rsq);
+					pair_force += kT * log(pj_one) * ffj_one[0] * sech_one/sqrt(rsq);
+					*/
+      				/* End of first subforce part coupled with particle j */
+
+					while(beta != 0)
 					{
-						if(alpha == 2){
-							beta = 1;
-						}
-          				/* First subforce part from two particle interaction */
-          				/*
-						double ffj_one[3];
-						double pj_one = P(jtype, beta, x[j], ffj_one, W[j], dW[j], 1);
-						double sech_one = 1.0 - pow(tanh((sqrt(rsq) - sigma_cutoff)/(0.1 * sigma_cutoff)),2.0);
-						subforce_1[i][0] += kT * log(pj_one) * ffj_one[0] * sech_one * delx/sqrt(rsq);
-						subforce_1[i][1] += kT * log(pj_one) * ffj_one[1] * sech_one * dely/sqrt(rsq);
-						subforce_1[i][2] += kT * log(pj_one) * ffj_one[2] * sech_one * delz/sqrt(rsq);
-						pair_force += kT * log(pj_one) * ffj_one[0] * sech_one/sqrt(rsq);
+						double ffi[3], ffj[3];
+						double pi = P(itype, alpha, x[i], ffi, W[i], dW[i],0);
+						double pj = P(jtype, beta, x[j], ffj, W[j], dW[j],0);
+            /*
+						fprintf(screen,"Ptcl %lf P value: (%d) %8.4E, Ptcl %lf P value: (%d) %8.4E \n", x[i][0], alpha, pi, x[j][0], beta, pj);
+            */
+						forcelj = r6inv * (lj1[alpha][beta]*r6inv - lj2[alpha][beta]);
+        				/* Second subforce term is fpair */
+						fpair = factor_lj*forcelj*r2inv * pi * pj;
+						subforce_2[i][0] += fpair * delx;
+						subforce_2[i][1] += fpair * dely;
+						subforce_2[i][2] += fpair * delz;
+            			/* End of second subforce term */
+						evdwl = r6inv*(lj3[alpha][beta]*r6inv-lj4[alpha][beta]) - offset[alpha][beta];
+						evdwl *= factor_lj;
+						pair_force += fpair;
+            			/* Tally energy calculation */
+            			energy_lj += evdwl * pi * pj;
+            			/* Third subforce term */
+            			/* End of third subforce term */
+
+	    				/* Pairwise force calculation from subforce 3 */
+            			double ffj_reduce[3];
+                		double sech_j = 1.0 - pow(tanh((sqrt(rsq) - sigma_cutoff)/(0.1 * sigma_cutoff)),2.0);
+            			double pj_reduce = P(jtype, beta, x[j], ffj_reduce, W[j], dW[j],1);
+                		subforce_3[i][0] += ffi[0] * pj_reduce * evdwl + ffj_reduce[0] * pi * sech_j * evdwl * delx/sqrt(rsq);
+		                subforce_3[i][1] += ffi[1] * pj_reduce * evdwl + ffj_reduce[1] * pi * sech_j * evdwl * dely/sqrt(rsq);
+		                subforce_3[i][2] += ffi[2] * pj_reduce * evdwl + ffj_reduce[2] * pi * sech_j * evdwl * delz/sqrt(rsq);
+            			pair_force += pj * ffi[0] * evdwl + ffj_reduce[0] * pi * sech_j* evdwl;
+            			/*
+            			if (newton_pair || j < nlocal)
+            			{
+            				f[j][0] -= delx * fpair - ffi[0] * pj * evdwl;
+            				f[j][1] -= dely * fpair - ffi[1] * pj * evdwl;
+            				f[j][2] -= delz * fpair - ffi[2] * pj * evdwl;
+            			}
 						*/
-          				/* End of first subforce part coupled with particle j */
-
-						while(beta != 0)
-						{
-							double ffi[3], ffj[3];
-							double pi = P(itype, alpha, x[i], ffi, W[i], dW[i],0);
-							double pj = P(jtype, beta, x[j], ffj, W[j], dW[j],0);
-							forcelj = r6inv * (lj1[alpha][beta]*r6inv - lj2[alpha][beta]);
-            				/* Second subforce term is fpair */
-							fpair = factor_lj*forcelj*r2inv * pi * pj;
-							subforce_2[i][0] += fpair * delx;
-							subforce_2[i][1] += fpair * dely;
-							subforce_2[i][2] += fpair * delz;
-	            			/* End of second subforce term */
-							evdwl = r6inv*(lj3[alpha][beta]*r6inv-lj4[alpha][beta]) - offset[alpha][beta];
-							evdwl *= factor_lj;
-							pair_force += fpair;
-	            			/* Tally energy calculation */
-	            			energy_lj += evdwl * pi * pj;
-	            			/* Third subforce term */
-	            			subforce_3[i][0] += ffi[0] * pj * evdwl + ffj[0] * pi * evdwl;
-	            			subforce_3[i][1] += ffi[1] * pj * evdwl + ffj[1] * pi * evdwl;
-	            			subforce_3[i][2] += ffi[2] * pj * evdwl + ffj[2] * pi * evdwl;
-	            			/* End of third subforce term */
-
-		    				/* Pairwise force calculation from subforce 3 */
-	            			double ffi_reduce[3], ffj_reduce[3];
-	            			double pi_reduce = P(itype, alpha, x[i], ffi_reduce, W[i], dW[i],1);
-	            			double pj_reduce = P(jtype, beta, x[j], ffj_reduce, W[j], dW[j],1);
-	            			pair_force += pi_reduce * ffi_reduce[0] * pj * evdwl + pj_reduce * ffj_reduce[0] * pi * evdwl;
-	            			/*
-	            			if (newton_pair || j < nlocal)
-	            			{
-	            				f[j][0] -= delx * fpair - ffi[0] * pj * evdwl;
-	            				f[j][1] -= dely * fpair - ffi[1] * pj * evdwl;
-	            				f[j][2] -= delz * fpair - ffi[2] * pj * evdwl;
-	            			}
-							*/
-	            			beta = type_linked[beta];
-	            		}
-	            		alpha = type_linked[alpha];
-	            	}
-	            }
-
+            			beta = type_linked[beta];
+            		}
+            		alpha = type_linked[alpha];
+            	}
 	            for (kk = 0; kk < jnum; kk++) {
 	            	k = jlist[kk];
 	            	if (k != j){
-	            	factor_lj = special_lj[sbmask(k)];
-	            	k &= NEIGHMASK;
+		            	factor_lj = special_lj[sbmask(k)];
+		            	k &= NEIGHMASK;
 
-	            	deljkx = x[j][0] - x[k][0];
-	            	deljky = x[j][1] - x[k][1];
-	            	deljkz = x[j][2] - x[k][2];
-	            	rsqjk = deljkx*deljkx + deljky*deljky + deljkz*deljkz;
-	            	ktype = type[k];
+		            	deljkx = x[j][0] - x[k][0];
+		            	deljky = x[j][1] - x[k][1];
+		            	deljkz = x[j][2] - x[k][2];
+		            	rsqjk = deljkx*deljkx + deljky*deljky + deljkz*deljkz;
+		            	ktype = type[k];
 
-	            	delikx = xtmp - x[k][0];
-	            	deliky = ytmp - x[k][1];
-	            	delikz = ztmp - x[k][2];
-	            	rsqik = delikx*delikx + deliky*deliky + delikz*delikz;
+		            	delikx = xtmp - x[k][0];
+		            	deliky = ytmp - x[k][1];
+		            	delikz = ztmp - x[k][2];
+		            	rsqik = delikx*delikx + deliky*deliky + delikz*delikz;
 
-	            	if (rsqjk < 0.25*cutsq[jtype][ktype] && rsqjk > 0.0) 
-	            	{
-	            		if (rsqik < 0.25*cutsq[itype][ktype] || rsq < 0.25*cutsq[itype][jtype])
-	            		{
-	            			if (rsq < 0.25*cutsq[itype][jtype] && rsq > 0.0)
-	            			{
-	            				if (rsqik < 0.25*cutsq[itype][ktype] && rsqik > 0.0)
-	            				{
-                				/* 4-(3) subforce term from the force expression : about j-k interaction*/
-      							/* Using ik -- for j's interaction */
-	            					r2ikinv = 1.0/rsqik;
-	            					r6ikinv = r2ikinv*r2ikinv*r2ikinv;
+		            	if (rsqjk < 0.25*cutsq[jtype][ktype] && rsqjk > 0.0)
+		            	{
+		            		if (rsqik < 0.25*cutsq[itype][ktype] && rsqik > 0.0)
+		            		{
+	                			/* 4-(3) subforce term from the force expression : about j-k interaction*/
+	      						/* Using ik -- for j's interaction */
+		            			r2ikinv = 1.0/rsqik;
+		            			r6ikinv = r2ikinv*r2ikinv*r2ikinv;
 
                 				/* Using jk -- for LJ force computation */
-	            					r2jkinv = 1.0/rsqjk;
-	            					r6jkinv = r2jkinv*r2jkinv*r2jkinv;
+	            				r2jkinv = 1.0/rsqjk;
+		            			r6jkinv = r2jkinv*r2jkinv*r2jkinv;
 
-	            					int alpha = jtype;
-	            					int beta  = ktype;
-	            					double pj_2, pk;
+		            			int alpha = jtype;
+		            			int beta  = ktype;
+		            			double pj_2, pk;
 
-	            					while(alpha !=0)
-	            					{
-	            						if(alpha == 2){
-	            							beta = 1;
-	            						}
-	            						while(beta != 0)
-	            						{
-	            							double ffj_2[3], ffk[3];
-	            							double pj_2 = P(jtype, alpha, x[j], ffj_2, W[j], dW[j],1);
-	            							double pk = P(ktype, beta, x[k], ffk, W[k], dW[k],1);
-	            							double sech_one_j = 1.0 - pow(tanh((sqrt(rsqjk) - sigma_cutoff)/(0.1 * sigma_cutoff)),2.0);
-	            							double sech_one_k = 1.0 - pow(tanh((sqrt(rsqik) - sigma_cutoff)/(0.1 * sigma_cutoff)),2.0);
+		            			while(alpha !=0)
+		            			{
+		            				if(alpha == 2){
+		            					beta = 1;
+		            				}
+		            				if(alpha == 4){
+										beta = 3;
+									}
+		            				while(beta != 0)
+		            				{
+		            					double ffj_2[3], ffk[3];
+		            					double pj_2 = P(jtype, alpha, x[j], ffj_2, W[j], dW[j],1);
+		            					double pk = P(ktype, beta, x[k], ffk, W[k], dW[k],1);
+		            					double sech_one_j = 1.0 - pow(tanh((sqrt(rsq) - sigma_cutoff)/(0.1 * sigma_cutoff)),2.0);
+		            					double sech_one_k = 1.0 - pow(tanh((sqrt(rsqik) - sigma_cutoff)/(0.1 * sigma_cutoff)),2.0);
 
-	            							forcelj = r6jkinv * (lj1[alpha][beta]*r6jkinv - lj2[alpha][beta]);
-	            							ffactor_jk = factor_lj* forcelj*r2jkinv;
+										evdwl_jk_1 = r6jkinv*(lj3[alpha][beta]*r6jkinv-lj4[alpha][beta]) - offset[alpha][beta];
+										evdwl_jk_1 *= factor_lj;
 
-	            							subforce_4[i][0] += 1.0 * ffactor_jk * (pj_2 * ffk[0] * sech_one_k * delikx/sqrt(rsqik) + pk * ffj_2[0] * sech_one_j * delx/sqrt(rsq));
-	            							subforce_4[i][1] += 1.0 * ffactor_jk * (pj_2 * ffk[1] * sech_one_k * deliky/sqrt(rsqik) + pk * ffj_2[1] * sech_one_j * dely/sqrt(rsq));
-	            							subforce_4[i][2] += 1.0 * ffactor_jk * (pj_2 * ffk[2] * sech_one_k * delikz/sqrt(rsqik) + pk * ffj_2[2] * sech_one_j * delz/sqrt(rsq));
-	            							pair_force += ffactor_jk * (pj_2 * ffk[0] * sech_one_k/sqrt(rsqik) + pk * ffj_2[0] * sech_one_j/sqrt(rsq));
-				            				/* Ignore newton pair
-				            				if (newton_pair || j < nlocal)
-				            				{
-				              					f[j][0] -= delx * fpair - ffi[0] * pj * evdwl;
-				              			 		f[j][1] -= dely * fpair - ffi[1] * pj * evdwl;
-				              					f[j][2] -= delz * fpair - ffi[2] * pj * evdwl;
-				            				}
-											*/
-				            				beta = type_linked[beta];
-				            			}
-				            			alpha = type_linked[alpha];
-				            		}	
-				            	}
-				            }
-				            else if (rsq > 0.25*cutsq[itype][jtype])
+		            					subforce_4[i][0] += 0.5 * evdwl_jk_1 * (pj_2 * ffk[0] * sech_one_k * delikx/sqrt(rsqik) + pk * ffj_2[0] * sech_one_j * delx/sqrt(rsq));
+		            					subforce_4[i][1] += 0.5 * evdwl_jk_1 * (pj_2 * ffk[1] * sech_one_k * deliky/sqrt(rsqik) + pk * ffj_2[1] * sech_one_j * dely/sqrt(rsq));
+		            					subforce_4[i][2] += 0.5 * evdwl_jk_1 * (pj_2 * ffk[2] * sech_one_k * delikz/sqrt(rsqik) + pk * ffj_2[2] * sech_one_j * delz/sqrt(rsq));
+		            					pair_force += evdwl_jk_1 * 0.5 * (pj_2 * ffk[0] * sech_one_k/sqrt(rsqik) + pk * ffj_2[0] * sech_one_j/sqrt(rsq));
+					            		/* Ignore newton pair
+					            		if (newton_pair || j < nlocal)
+					            		{
+					            			f[j][0] -= delx * fpair - ffi[0] * pj * evdwl;
+					              			f[j][1] -= dely * fpair - ffi[1] * pj * evdwl;
+					              			f[j][2] -= delz * fpair - ffi[2] * pj * evdwl;
+					            		}
+										*/
+					            		beta = type_linked[beta];
+					            	}
+					           		alpha = type_linked[alpha];
+					           	}
+					        }
+				            else
 				            {
       							/* 4-(1) term */
 				            	r2ikinv = 1.0/rsqik;
@@ -563,20 +551,24 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 				            		if(alpha == 2){
 				            			beta = 1;
 				            		}
+									if(alpha == 4){
+										beta = 3;
+									}
+
 				            		while(beta != 0)
 				            		{
 				            			double ffj_3[3], ffk_2[3];
 				            			double pj_3 = P(jtype, alpha, x[j], ffj_3, W[j], dW[j],1);
 				            			double pk_2 = P(ktype, beta, x[k], ffk_2, W[k], dW[k],1);
-				            			double sech_one_k = 1.0 - pow(tanh((sqrt(rsqik) - sigma_cutoff)/(0.1 * sigma_cutoff)),2.0);
+				            			double sech_one_j_1 = 1.0 - pow(tanh((sqrt(rsq) - sigma_cutoff)/(0.1 * sigma_cutoff)),2.0);
 
-				            			forcelj = r6jkinv * (lj1[alpha][beta]*r6jkinv - lj2[alpha][beta]);
-				            			ffactor_jk = factor_lj* forcelj*r2jkinv;
+										evdwl_jk_2 = r6jkinv*(lj3[alpha][beta]*r6jkinv-lj4[alpha][beta]) - offset[alpha][beta];
+										evdwl_jk_2 *= factor_lj;
 
-				            			subforce_4[i][0] += ffactor_jk * (pj_3 * ffk_2[0] * sech_one_k * delikx/sqrt(rsqik));
-				            			subforce_4[i][1] += ffactor_jk * (pj_3 * ffk_2[1] * sech_one_k * deliky/sqrt(rsqik));
-				            			subforce_4[i][2] += ffactor_jk * (pj_3 * ffk_2[2] * sech_one_k * delikz/sqrt(rsqik));
-				            			pair_force += ffactor_jk * (pj_3 * ffk_2[0] * sech_one_k/sqrt(rsqik));
+				            			subforce_4[i][0] += evdwl_jk_2 * (pk_2 * ffj_3[0] * sech_one_j_1 * delx/sqrt(rsq));
+				            			subforce_4[i][1] += evdwl_jk_2 * (pk_2 * ffj_3[1] * sech_one_j_1 * dely/sqrt(rsq));
+				            			subforce_4[i][2] += evdwl_jk_2 * (pk_2 * ffj_3[2] * sech_one_j_1 * delz/sqrt(rsq));
+				            			pair_force += evdwl_jk_1 * (pk_2 * ffj_3[0] * sech_one_j_1/sqrt(rsq));
 								  		/* Ignore newton_pair
 						                if (newton_pair || j < nlocal)
 						                {
@@ -588,25 +580,27 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 						                beta = type_linked[beta];
 						            }
 						            alpha = type_linked[alpha];
-						        } 
-						    }
-						}
-					}
-				}
-			}
-      			/* End of k loop */
-				totalforce[i][0] = subforce_1[i][0]+subforce_2[i][0]+subforce_3[i][0]+subforce_4[i][0];
-				totalforce[i][1] = subforce_1[i][1]+subforce_2[i][1]+subforce_3[i][1]+subforce_4[i][1];
-				totalforce[i][2] = subforce_1[i][2]+subforce_2[i][2]+subforce_3[i][2]+subforce_4[i][2];
-				f[i][0] += totalforce[i][0];
-				f[i][1] += totalforce[i][1];
-				f[i][2] += totalforce[i][2];
-
-				if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
-			}
-		}
-		if (vflag_fdotr) virial_fdotr_compute();
+						        }
+						    } /* end of if-else loop*/
+						} /* k if loop closes */
+					} /* if k!= j closes */
+				}/* End of k loop */
+			} 
+			/* Printing section */
+			if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
+		} /* End of j loop */
+		totalforce[i][0] = subforce_1[i][0]+subforce_2[i][0]+subforce_3[i][0]+subforce_4[i][0];
+		totalforce[i][1] = subforce_1[i][1]+subforce_2[i][1]+subforce_3[i][1]+subforce_4[i][1];
+		totalforce[i][2] = subforce_1[i][2]+subforce_2[i][2]+subforce_3[i][2]+subforce_4[i][2];
+		f[i][0] += totalforce[i][0];
+		f[i][1] += totalforce[i][1];
+		f[i][2] += totalforce[i][2];
+      	fprintf(screen, "Iteration number : %d \n Particle %d position: (%lf,%lf,%lf) \n Subforce 1: (%8.4E,%8.4E,%8.4E), Subforce 2: (%8.4E,%8.4E,%8.4E), Subforce 3: (%8.4E,%8.4E,%8.4E), Subforce 4: (%8.4E,%8.4E,%8.4E) \n Totalforce: (%8.4E,%8.4E,%8.4E) \n", countiter, i, x[i][0],x[i][1],x[i][2],subforce_1[i][0],subforce_1[i][1],subforce_1[i][2],subforce_2[i][0],subforce_2[i][1],subforce_2[i][2],subforce_3[i][0],subforce_3[i][1],subforce_3[i][2],subforce_4[i][0],subforce_4[i][1],subforce_4[i][2],totalforce[i][0],totalforce[i][1],totalforce[i][2]);
+      	
+      	countiter += 1;
 	}
+	if (vflag_fdotr) virial_fdotr_compute();
+}
 
 /* ---------------------------------------------------------------------- */
 
@@ -922,7 +916,7 @@ void PairMSUCG_NEIGH::settings(int narg, char **arg)
 
 void PairMSUCG_NEIGH::coeff(int narg, char **arg)
 {
-  if (narg < 4 || narg > 5)
+  if (narg < 5 || narg > 6)
     error->all(FLERR,"Incorrect args for pair coefficients");
   if (!allocated) allocate();
 
@@ -963,7 +957,7 @@ void PairMSUCG_NEIGH::init_style()
 
   int irequest;
   int newton_pair = force->newton_pair;
-  
+
   if (update->whichflag == 1 && strstr(update->integrate_style,"respa")) {
     int respa = 0;
     if (((Respa *) update->integrate)->level_inner >= 0) respa = 1;
@@ -998,7 +992,7 @@ void PairMSUCG_NEIGH::init_style()
     irequest = neighbor->request(this,instance_me);
     neighbor->requests[irequest]->half=0;
     neighbor->requests[irequest]->full=1;
-  } 
+  }
   // set rRESPA cutoffs
 
   if (strstr(update->integrate_style,"respa") &&
@@ -1050,6 +1044,12 @@ double PairMSUCG_NEIGH::init_one(int i, int j)
                                sigma[i][i],sigma[j][j]);
     sigma[i][j] = mix_distance(sigma[i][i],sigma[j][j]);
     cut[i][j] = mix_distance(cut[i][i],cut[j][j]);
+    /*
+    double check = ((i-1)+(j-2)) * ((i-3)+(j-4));
+    if (check != 0){
+    	epsilon[i][j] = epsilon[i][j] * 0.20;
+    }
+    */
   }
 
   lj1[i][j] = 48.0 * epsilon[i][j] * pow(sigma[i][j],12.0);
