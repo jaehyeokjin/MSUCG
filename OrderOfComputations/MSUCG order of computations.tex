@@ -22,20 +22,11 @@ where $\{p_i\}$ is a set of per-particle probabilities of occupying a given stat
 
 The set of forces on all particles due to this potential is found from calculations of the derivatives
 \begin{align}
-<<<<<<< HEAD
-\nabla U =&  \nabla U(\{\mathbf{r}_i\}) = \nabla U(\{p_i(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) \\
-=& -\Biggl( \sum_\alpha(\nabla_i p_{s_i,\alpha})\cdot(\mu_\alpha-kT \ln p_{s_i,\alpha}) +\sum_{j \in N(i)}\sum_\alpha \nabla_i p_{s_j,\alpha} \cdot (\mu_\alpha-kT \ln p_{s_j,\alpha})\Biggr) \\ \notag
- &-\Biggl( \sum_{j \in N(i)} \sum_{\alpha \beta} p_{s_i,\alpha}p_{s_j,\beta} \cdot \nabla_i u_{\alpha\beta} \Biggr) \\ \notag
- & - \Biggl( \Big\{ \sum_{j \in N(i)}  \sum_{\alpha \beta} \bigl( \nabla_i p_{s_i,\alpha} p_{s_j,\beta}+  p_{s_i,\alpha} \nabla_i p_{s_j,\beta} \bigr) \cdot u_{\alpha \beta} \Big\} \\ \notag
- & \qquad+ \Big\{\Bigl( \sum_{\substack{j \notin N(i) \\ k \in N(i)}} \sum_{\alpha \beta} \bigl( p_{s_j,\alpha} \nabla_i p_{s_k,\beta} \bigr) + \sum_{\substack{j \in N(i) \\ k \notin N(i)}} \sum_{\alpha \beta} \bigl( \nabla_ip_{s_j,\alpha}  p_{s_k,\beta} \bigr)+ \sum_{\substack{j \in N(i) \\ k \in N(i)}} \sum_{\alpha \beta} \bigl(p_{s_j,\alpha} \nabla_i p_{s_k,\beta} \\ \notag
-& \qquad \qquad+ \nabla_ip_{s_j,\alpha}  p_{s_k,\beta} \bigr) \Bigr)  \cdot u_{\alpha\beta}\Big\} \Biggr)  \notag
-=======
 \nabla U &=  \nabla U(\{\mathbf{r}_i\}) = \nabla U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) \\
 \end{align}
 which can be rewritten using the chain rule as
 \begin{align}
 \nabla U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) &= \nabla U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\}) |_{\{p_{i, \alpha}(\{\mathbf{r}_j\})\}} + \sum_{i, \alpha} \frac{d U(\{p_{i, \alpha}(\{\mathbf{r}_j\})\}, \{\mathbf{r}_i\})}{d p_{i, \alpha}} |_{\{\mathbf{r}_j\}} \nabla p_{i, \alpha}(\{\mathbf{r}_j\})
->>>>>>> origin/master
 \end{align}
 
 There are two ways to consider evaluating this. One is to carry through the derivatives, group terms, and then look for algebraic structure in the result that can simplify the calculation. For instance, when $p_i(\{\mathbf{r}_j\})$ is a function of a local density measured as a sum of pairwise proximity functions with finite range,
