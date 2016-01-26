@@ -56,6 +56,9 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   subforce_3 = NULL;
   subforce_4 = NULL;
   totalforce = NULL;
+  // For new_OoOp:
+  // state_probs = NULL;
+  // state_prob_partials = NULL;
   comm_reverse = 5;
   comm_forward = 5;
 }
