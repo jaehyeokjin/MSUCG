@@ -16,6 +16,7 @@ x_high = 10.7
 x_low = 0.0
 g_x = numpy.array([delg * (i + 0.5) for i in range(0, nhis)])
 g_y = numpy.zeros(nhis)
+g_vols = (4.0 / 3.0) * math.pi * numpy.array([(float(i + 1)**3.0 - float(i)**3.0) * (delg**3.0) for i in range(0, nhis)])
 g_temp = numpy.zeros(nhis)
 # Trajectory configuration variables
 n_particles = 1125
@@ -59,11 +60,11 @@ with open(filename, "r") as filestream:
                 g_temp = numpy.zeros(nhis)
                 poi = 0.0
                 poj = 0.0
-                for i in range(0, len(pos_x)):
+                for i in range(0, n_particles):
                     tan_factor = math.tanh((w[i] - wcut) / (0.1 * wcut))
                     poi += 1.0
                     poj += 1.0
-                    for j in range(0, len(pos_x)):
+                    for j in range(0, n_particles):
                         if(i != j):
                             pos_dx = pos_x[i] - pos_x[j]
                             pos_dx = pos_dx - box * round(pos_dx / box)
@@ -76,7 +77,8 @@ with open(filename, "r") as filestream:
                             if dist < (box / 2.0):
                                 ig = int(dist / delg)
                                 g_temp[ig] += 1.0
-                print(poi)
+
+                print poi
                 if (poi > 1.0):
                     number_density = (poi - 1.0) / (box * box * box * 2.0)
                     print(number_density)
@@ -84,12 +86,8 @@ with open(filename, "r") as filestream:
                 # Normalize the temp histogram if it is nonzero.
                 # Flag if it is zero. (In this case that is impossible.)
                 if (poi > 1.0):
-                    for i in range(0, nhis):
-                        #volume = ((i+1)**2.0 - i**2.0 ) * (delg**2.0)
-                        delta_rcubed = (float(i + 1)**3.0 - float(i)**3.0) * (delg**3.0)
-                        num_ideal = (4.0 / 3.0) * math.pi * delta_rcubed * number_density
-                        #num_ideal = math.pi*volume*rho
-                        g_temp[i] = g_temp[i] / (float(poi) * num_ideal)
+                    num_ideal = number_density * g_vols
+                    g_temp = (g_temp / num_ideal) / float(poi)
                     zero_flag = 0
                 else:
                     zero_flag = 1
@@ -104,9 +102,7 @@ with open(filename, "r") as filestream:
             if (average_number > 0 and update == 1):
                 update = 0
                 if (zero_flag == 0):
-                    for i in range(0, nhis):
-                        g_y[i] = (g_y[i] * float(average_number - 1) +
-                                  g_temp[i]) / float(average_number)
+                    g_y = (float(average_number - 1) * g_y + g_temp) / float(average_number)
     print(average_number)
 
 filename_stem = filename.split(".")[0]
