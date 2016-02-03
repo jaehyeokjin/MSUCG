@@ -1,17 +1,16 @@
 import sys
-import copy
 import math
 filename = sys.argv[1]
-name = filename.split(".")
 f = open(filename, "r")
-outname = name[0] + "_rdf.data"
+name_stem = filename.split(".")[0]
+outname = name_stem + "_rdf.data"
 rdf_data = open(outname, 'w')
 lines = f.readlines()
 k = 0
 time_element = 0
+
+
 # float_array: string array -> float array
-
-
 def float_array(input):
     result = []
     for i in range(len(input)):
@@ -70,7 +69,6 @@ for line in lines:
                 tan_factor = math.tanh((w[i] - wcut) / (0.1 * wcut))
                 poi += 1.0
                 poj += 1.0
-            for i in range(0, len(pos_x)):
                 for j in range(0, len(pos_x)):
                     if(i != j):
                         pos_dx = pos_x[i] - pos_x[j]
@@ -86,15 +84,16 @@ for line in lines:
                             g_temp[ig] = g_temp[ig] + 1.0
             print(poi)
             if (poi > 1.0):
-                rho = (poi - 1.0) / (box * box * box * 2.0)
-                print(rho)
+                number_density = (poi - 1.0) / (box * box * box * 2.0)
+                print(number_density)
                 average_number += 1
+            # Normalize the temp histogram.
             for i in range(0, nhis):
                 if (poi > 1.0):
                     r = delg * (i + 0.5)
                     #volume = ((i+1)**2.0 - i**2.0 ) * (delg**2.0)
-                    volume = (float(i + 1)**3.0 - float(i)**3.0) * (delg**3.0)
-                    num_ideal = (4.0 / 3.0) * math.pi * volume * rho
+                    delta_rcubed = (float(i + 1)**3.0 - float(i)**3.0) * (delg**3.0)
+                    num_ideal = (4.0 / 3.0) * math.pi * delta_rcubed * number_density
                     #num_ideal = math.pi*volume*rho
                     g_temp[i] = g_temp[i] / (float(poi) * num_ideal)
                     g_x[i] = r
@@ -120,8 +119,8 @@ for line in lines:
             pos_z.append(line_element[4])
             w.append(line_element[10])
 print(average_number)
-for i in range(1, nhis + 1):
-    tmp = str(g_x[i - 1]) + ' ' + str(g_y[i - 1])
+for i in range(0, nhis):
+    tmp = str(g_x[i]) + ' ' + str(g_y[i])
     rdf_data.write(tmp)
     rdf_data.write('\n')
 f.close()
