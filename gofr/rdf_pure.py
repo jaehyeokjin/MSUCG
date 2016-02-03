@@ -1,13 +1,5 @@
 import sys
 import math
-filename = sys.argv[1]
-f = open(filename, "r")
-name_stem = filename.split(".")[0]
-outname = name_stem + "_rdf.data"
-rdf_data = open(outname, 'w')
-lines = f.readlines()
-k = 0
-time_element = 0
 
 
 # float_array: string array -> float array
@@ -17,28 +9,37 @@ def float_array(input):
         result.append(float(input[i]))
     return result
 
+# Read the filename from the command line arguments.
+filename = sys.argv[1]
+
+# Open & read in the file for analysis.
+f = open(filename, "r")
+lines = f.readlines()
+# Define two trajectory reading helper variables.
+k = 0
+time_element = 0
+
 # initial value setup
-zero_flag = 0
 wcut = 10.0
-box = 10.700  # isotropic box
-z_box = 21.400
+box = 10.700  # isotropic box in x & y
+z_box = 21.400  # twice the length in z
 g_end = 10.0
-ngr = 0
 nhis = 101
 delg = 0.1
 x_high = 10.7
 x_low = 0.0
-g_x = [i for i in range(1, nhis + 1)]
-g_y = [0 for _ in range(1, nhis + 1)]
-g_temp = [0 for _ in range(1, nhis + 1)]
+g_x = [delg * (i + 0.5) for i in range(0, nhis)]
+g_y = [0.0 for _ in range(0, nhis)]
+g_temp = [0.0 for _ in range(0, nhis)]
+# Trajectory configuration variables
 pos_x = []
 pos_y = []
 pos_z = []
 w = []
+# Other control flow variables
+zero_flag = 0
 update = 0
 average_number = 0
-for i in range(0, nhis):
-    g_y[i] = 0.0
 
 # Counting the number of the particles for each case and put it in count[] array
 # 1 : refers to normal oxygen
@@ -90,13 +91,11 @@ for line in lines:
             # Normalize the temp histogram.
             for i in range(0, nhis):
                 if (poi > 1.0):
-                    r = delg * (i + 0.5)
                     #volume = ((i+1)**2.0 - i**2.0 ) * (delg**2.0)
                     delta_rcubed = (float(i + 1)**3.0 - float(i)**3.0) * (delg**3.0)
                     num_ideal = (4.0 / 3.0) * math.pi * delta_rcubed * number_density
                     #num_ideal = math.pi*volume*rho
                     g_temp[i] = g_temp[i] / (float(poi) * num_ideal)
-                    g_x[i] = r
                     zero_flag = 0
                 else:
                     g_temp[i] = 0.0
@@ -119,9 +118,12 @@ for line in lines:
             pos_z.append(line_element[4])
             w.append(line_element[10])
 print(average_number)
-for i in range(0, nhis):
-    tmp = str(g_x[i]) + ' ' + str(g_y[i])
-    rdf_data.write(tmp)
-    rdf_data.write('\n')
 f.close()
-rdf_data.close()
+
+filename_stem = filename.split(".")[0]
+out_filename = filename_stem + "_rdf.data"
+with open(out_filename, 'w') as rdf_data:
+    for i in range(0, nhis):
+        tmp = str(g_x[i]) + ' ' + str(g_y[i])
+        rdf_data.write(tmp)
+        rdf_data.write('\n')
