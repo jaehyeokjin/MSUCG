@@ -1,23 +1,9 @@
 import sys
 import math
-
-
-# float_array: string array -> float array
-def float_array(input):
-    result = []
-    for i in range(len(input)):
-        result.append(float(input[i]))
-    return result
+import numpy
 
 # Read the filename from the command line arguments.
 filename = sys.argv[1]
-
-# Open & read in the file for analysis.
-f = open(filename, "r")
-lines = f.readlines()
-# Define two trajectory reading helper variables.
-k = 0
-time_element = 0
 
 # initial value setup
 wcut = 10.0
@@ -28,97 +14,100 @@ nhis = 101
 delg = 0.1
 x_high = 10.7
 x_low = 0.0
-g_x = [delg * (i + 0.5) for i in range(0, nhis)]
-g_y = [0.0 for _ in range(0, nhis)]
-g_temp = [0.0 for _ in range(0, nhis)]
+g_x = numpy.array([delg * (i + 0.5) for i in range(0, nhis)])
+g_y = numpy.zeros(nhis)
+g_temp = numpy.zeros(nhis)
 # Trajectory configuration variables
-pos_x = []
-pos_y = []
-pos_z = []
-w = []
+n_particles = 1125
+n_particles_read = 0
+pos_x = numpy.zeros(n_particles)
+pos_y = numpy.zeros(n_particles)
+pos_z = numpy.zeros(n_particles)
+w = numpy.zeros(n_particles)
 # Other control flow variables
 zero_flag = 0
 update = 0
 average_number = 0
 
-# Counting the number of the particles for each case and put it in count[] array
-# 1 : refers to normal oxygen
-# 2 : refers to normal hydrogen
-# 3 : refers to oxygen from hydronium
-# 4 : refers to hydrogen from hydronium
-# 5 : Cl- ion
-index = 1  # test case for normal oxygens
-count = 0  # number of the particle
-for line in lines:
-    line_element = line.split()
-    if(line_element[0] == 'ITEM:'):
-        k = (k + 1) % 4
-    if(k == 1 and len(line_element) == 1):
-        time_element = int(line_element[0])
-        print(time_element)
-        if (len(pos_z) > 0):
-            for i in range(0, nhis):
-                g_temp[i] = 0.0
-            pos_x = float_array(pos_x)
-            pos_y = float_array(pos_y)
-            pos_z = float_array(pos_z)
-            w = float_array(w)
-            poi = 0.0
-            poj = 0.0
-
-            for i in range(0, len(pos_x)):
-                tan_factor = math.tanh((w[i] - wcut) / (0.1 * wcut))
-                poi += 1.0
-                poj += 1.0
-                for j in range(0, len(pos_x)):
-                    if(i != j):
-                        pos_dx = pos_x[i] - pos_x[j]
-                        pos_dx = pos_dx - box * round(pos_dx / box)
-                        pos_dy = pos_y[i] - pos_y[j]
-                        pos_dy = pos_dy - box * round(pos_dy / box)
-                        pos_dz = pos_z[i] - pos_z[j]
-                        pos_dz = pos_dz - box * round(pos_dz / z_box)
-                        dist = (pos_dx * pos_dx + pos_dy *
-                                pos_dy + pos_dz * pos_dz)**(0.5)
-                        if dist < (box / 2.0):
-                            ig = int(dist / delg)
-                            g_temp[ig] = g_temp[ig] + 1.0
-            print(poi)
-            if (poi > 1.0):
-                number_density = (poi - 1.0) / (box * box * box * 2.0)
-                print(number_density)
-                average_number += 1
-            # Normalize the temp histogram.
-            for i in range(0, nhis):
+# Open & read in the file for analysis.
+with open(filename, "r") as filestream:
+    # Define two trajectory reading helper variables.
+    header_line_counter = 0
+    time_element = 0
+    # Read the file line by line, gathering
+    # input & analyzing it frame by frame.
+    for line in filestream:
+        line_elements = line.split()
+        # Determine if this line is in a header section & where,
+        # if so.
+        if(line_elements[0] == 'ITEM:'):
+            header_line_counter = (header_line_counter + 1) % 4
+        # If it is not a header line, read in the configuration.
+        if(time_element > 80000):
+            if(time_element % 1000 == 0 and header_line_counter == 0 and line_elements[0] != 'ITEM:'):
+                pos_x[n_particles_read] = float(line_elements[2])
+                pos_y[n_particles_read] = float(line_elements[3])
+                pos_z[n_particles_read] = float(line_elements[4])
+                w[n_particles_read] = float(line_elements[10])
+                n_particles_read += 1
+        # If it is a timestep header line, read it and process
+        # the previous frame.
+        if(header_line_counter == 1 and len(line_elements) == 1):
+            time_element = int(line_elements[0])
+            print(time_element)
+            if (n_particles_read > 0):
+                g_temp = numpy.zeros(nhis)
+                poi = 0.0
+                poj = 0.0
+                for i in range(0, len(pos_x)):
+                    tan_factor = math.tanh((w[i] - wcut) / (0.1 * wcut))
+                    poi += 1.0
+                    poj += 1.0
+                    for j in range(0, len(pos_x)):
+                        if(i != j):
+                            pos_dx = pos_x[i] - pos_x[j]
+                            pos_dx = pos_dx - box * round(pos_dx / box)
+                            pos_dy = pos_y[i] - pos_y[j]
+                            pos_dy = pos_dy - box * round(pos_dy / box)
+                            pos_dz = pos_z[i] - pos_z[j]
+                            pos_dz = pos_dz - box * round(pos_dz / z_box)
+                            dist = (pos_dx * pos_dx + pos_dy *
+                                    pos_dy + pos_dz * pos_dz)**(0.5)
+                            if dist < (box / 2.0):
+                                ig = int(dist / delg)
+                                g_temp[ig] += 1.0
+                print(poi)
                 if (poi > 1.0):
-                    #volume = ((i+1)**2.0 - i**2.0 ) * (delg**2.0)
-                    delta_rcubed = (float(i + 1)**3.0 - float(i)**3.0) * (delg**3.0)
-                    num_ideal = (4.0 / 3.0) * math.pi * delta_rcubed * number_density
-                    #num_ideal = math.pi*volume*rho
-                    g_temp[i] = g_temp[i] / (float(poi) * num_ideal)
+                    number_density = (poi - 1.0) / (box * box * box * 2.0)
+                    print(number_density)
+                    average_number += 1
+                # Normalize the temp histogram if it is nonzero.
+                # Flag if it is zero. (In this case that is impossible.)
+                if (poi > 1.0):
+                    for i in range(0, nhis):
+                        #volume = ((i+1)**2.0 - i**2.0 ) * (delg**2.0)
+                        delta_rcubed = (float(i + 1)**3.0 - float(i)**3.0) * (delg**3.0)
+                        num_ideal = (4.0 / 3.0) * math.pi * delta_rcubed * number_density
+                        #num_ideal = math.pi*volume*rho
+                        g_temp[i] = g_temp[i] / (float(poi) * num_ideal)
                     zero_flag = 0
                 else:
-                    g_temp[i] = 0.0
                     zero_flag = 1
-            pos_x = []
-            pos_y = []
-            pos_z = []
-            w = []
-            update = 1
-        if (average_number > 0 and update == 1):
-            update = 0
-            for i in range(0, len(g_temp)):
+                # Reset the frame data now that it has been
+                # analyzed.
+                n_particles_read = 0
+                pos_x = numpy.zeros(n_particles)
+                pos_y = numpy.zeros(n_particles)
+                pos_z = numpy.zeros(n_particles)
+                w = numpy.zeros(n_particles)
+                update = 1
+            if (average_number > 0 and update == 1):
+                update = 0
                 if (zero_flag == 0):
-                    g_y[i] = (g_y[i] * float(average_number - 1) +
-                              g_temp[i]) / float(average_number)
-    if(time_element > 80000):
-        if(time_element % 1000 == 0 and k == 0 and line_element[0] != 'ITEM:'):
-            pos_x.append(line_element[2])
-            pos_y.append(line_element[3])
-            pos_z.append(line_element[4])
-            w.append(line_element[10])
-print(average_number)
-f.close()
+                    for i in range(0, nhis):
+                        g_y[i] = (g_y[i] * float(average_number - 1) +
+                                  g_temp[i]) / float(average_number)
+    print(average_number)
 
 filename_stem = filename.split(".")[0]
 out_filename = filename_stem + "_rdf.data"
