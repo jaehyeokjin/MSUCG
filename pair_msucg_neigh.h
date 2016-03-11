@@ -73,7 +73,7 @@ class PairMSUCG_NEIGH : public Pair {
                                   /*Comments:  and its partial derivative  */
 
 
-  double *W, **dW, *U;
+  double *number_density, **dW, *U;
   double **subforce_1, **subforce_2, **subforce_3, **subforce_4, **totalforce;
   double nmax;
 

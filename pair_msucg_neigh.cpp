@@ -333,9 +333,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
   	}
   	comm->reverse_comm_pair(this);
   	comm->forward_comm_pair(this);
+    /*
   	fprintf(screen,"S value print ptcle 1: %8.5E, %8.3E, %8.3E \n", dW[0][0], dW[0][1], dW[0][2]);
   	fprintf(screen,"S value print ptcle 2: %8.3E, %8.3E, %8.3E", dW[1][0], dW[1][1], dW[1][2]);
-    /*
     fprintf(screen,"S value print ptcle 3: %8.5E, %8.3E, %8.3E \n", dW[2][0], dW[2][1], dW[2][2]);
     */    
 		/* number_density value check
@@ -585,8 +585,10 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 		f[i][0] += totalforce[i][0];
 		f[i][1] += totalforce[i][1];
 		f[i][2] += totalforce[i][2];
+    /*
     fprintf(screen, "Iteration number : %d \n Particle %d position: (%lf,%lf,%lf) \n Subforce 1: (%8.4E,%8.4E,%8.4E), Subforce 2: (%8.4E,%8.4E,%8.4E), Subforce 3: (%8.4E,%8.4E,%8.4E), Subforce 4: (%8.4E,%8.4E,%8.4E) \n Totalforce: (%8.4E,%8.4E,%8.4E) \n", countiter, i, x[i][0],x[i][1],x[i][2],subforce_1[i][0],subforce_1[i][1],subforce_1[i][2],subforce_2[i][0],subforce_2[i][1],subforce_2[i][2],subforce_3[i][0],subforce_3[i][1],subforce_3[i][2],subforce_4[i][0],subforce_4[i][1],subforce_4[i][2],totalforce[i][0],totalforce[i][1],totalforce[i][2]);
     countiter += 1;
+    */
 	}
 	if (vflag_fdotr) virial_fdotr_compute();
 }
