@@ -48,14 +48,17 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   countiter = 0;
   countneigh = 0;
   nmax = 0;
+
+  nooc_probability = NULL;
+  
   number_density = NULL;
   dW = NULL;
-  U = NULL;
   subforce_1 = NULL;
   subforce_2 = NULL;
   subforce_3 = NULL;
   subforce_4 = NULL;
   totalforce = NULL;
+
   comm_reverse = 5;
   comm_forward = 5;
 }
@@ -130,6 +133,31 @@ double PairMSUCG_NEIGH::P(int type, int state, double *x, double *f, double w, d
   else error->one(FLERR, "Wrong type");
 }
 
+double PairMSUCG_NEIGH::threshold_prob_from_cv(int type, double cv) {
+  return 0.5 + 0.5 * tanh((cv - cv_thresholds[type]) / (0.1 * cv_thresholds[type]));
+}
+
+double PairMSUCG_NEIGH::probability_from_threshold_cv(int type, int state, double w)
+{
+  // Check that the state is a valid state for this type.
+  if (state != 1 && state != 2) {
+    char errstring[64];
+    sprintf(errstring, "Unknown state index %d for type %d", state, type);
+    error->one(FLERR, errstring);
+  }
+
+  // Calculate the probability for this state.
+  double tanhfactor = tanh((w - p_constant)/(0.1 * p_constant));
+  double prob_state_1 = 0.5 * (1 + tanhfactor);
+  if (state == 1) {
+    return prob_state_1;
+  } else if (state == 2) {
+    return 1 - prob_state_1;
+  } else {
+    return 1.0;
+  }
+}
+
 /* ---------------------------------------------------------------------- */
 
 int PairMSUCG_NEIGH::pack_reverse_comm(int n, int first, double *buf)
@@ -138,16 +166,15 @@ int PairMSUCG_NEIGH::pack_reverse_comm(int n, int first, double *buf)
 
   m = 0;
   last = first + n;
-
   for (i = first; i < last; i++)
   {
     buf[m++] = number_density[i];
-    buf[m++] = U[i];
     buf[m++] = dW[i][0];
     buf[m++] = dW[i][1];
     buf[m++] = dW[i][2];
-  }
 
+    buf[m++] = nooc_probability[i];
+  }
   return m;
 }
 
@@ -156,16 +183,13 @@ void PairMSUCG_NEIGH::unpack_reverse_comm(int n, int *list, double *buf)
   int i,j,m;
 
   m = 0;
-
   for (i = 0; i < n; i++) {
-
     j = list[i];
-
     number_density[j] += buf[m++];
-    U[j] += buf[m++];
     dW[j][0] += buf[m++];
     dW[j][1] += buf[m++];
     dW[j][2] += buf[m++];
+    nooc_probability[j] += buf[m++];
   }
 }
 
@@ -177,10 +201,10 @@ int PairMSUCG_NEIGH::pack_forward_comm(int n, int *list, double *buf)
   for (i = 0; i < n; i++){
     j = list[i];
     buf[m++] = number_density[j];
-    buf[m++] = U[j];
     buf[m++] = dW[j][0];
     buf[m++] = dW[j][1];
     buf[m++] = dW[j][2];
+    buf[m++] = nooc_probability[j];
   }
   return m;
 }
@@ -193,11 +217,17 @@ void PairMSUCG_NEIGH::unpack_forward_comm(int n, int first, double *buf)
   last = first + n;
   for (i = first; i < last; i++) {
     number_density[i] += buf[m++];
-    U[i] += buf[m++];
     dW[i][0] += buf[m++];
     dW[i][1] += buf[m++];
     dW[i][2] += buf[m++];
+    nooc_probability[i] += buf[m++];
   }
+}
+
+void compute_proximity_function_and_der(double distance, double sigma, double &proximity_val, double &proximity_der) {
+  double tanh_factor = tanh((distance - sigma) / (0.1 * sigma));
+  proximity_val = 0.5 * (1.0 - tanh_factor);
+  proximity_der = 1.0 - tanh_factor * tanh_factor;
 }
 
 void PairMSUCG_NEIGH::compute(int eflag, int vflag)
@@ -243,24 +273,59 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     	nmax = nall;
     	memory->grow(number_density, nall, "pair/msucg:number_density");
     	memory->grow(dW, nall, 3, "pair/msucg:dW");
-    	memory->grow(U, nall, "pair/msucg:U");
     	/* Subforce initialization */
     	memory->grow(subforce_1, nall, 3, "pair/msucg:subforce_1");
     	memory->grow(subforce_2, nall, 3, "pair/msucg:subforce_2");
     	memory->grow(subforce_3, nall, 3, "pair/msucg:subforce_3");
     	memory->grow(subforce_4, nall, 3, "pair/msucg:subforce_4");
     	memory->grow(totalforce, nall, 3, "pair/msucg:totalforce");
+
+      memory->grow(nooc_probability, nall, "pair/msucg:nooc_probability");
   	}
 
   	for(int i=0; i<nall; i++)
   	{
-  		number_density[i] = dW[i][0] = dW[i][1] = dW[i][2] = U[i] = 0.0;
+  		number_density[i] = dW[i][0] = dW[i][1] = dW[i][2] = 0.0;
   		subforce_1[i][0] = subforce_1[i][1] = subforce_1[i][2] = 0.0;
   		subforce_2[i][0] = subforce_2[i][1] = subforce_2[i][2] = 0.0;
   		subforce_3[i][0] = subforce_3[i][1] = subforce_3[i][2] = 0.0;
   		subforce_4[i][0] = subforce_4[i][1] = subforce_4[i][2] = 0.0;
   		totalforce[i][0] = totalforce[i][1] = totalforce[i][2] = 0.0;
+
+      nooc_probability[i] = 0.0;
  	}
+
+  // Calculate the state probabilities.
+  for (ii = 0; ii < inum; ii++) {
+    i = ilist[ii];
+    xtmp = x[i][0];
+    ytmp = x[i][1];
+    ztmp = x[i][2];
+    itype = type[i];
+    jlist = firstneigh[i];
+    jnum = numneigh[i];
+
+    for (jj = 0; jj < jnum; jj++) {
+      j = jlist[jj];
+      delx = xtmp - x[j][0];
+      dely = ytmp - x[j][1];
+      delz = ztmp - x[j][2];
+      rsq = delx*delx + dely*dely + delz*delz;
+      jtype = type[j];
+
+      if (rsq < 0.25 * cutsq[itype][jtype]) {
+        double distance = sqrt(rsq);
+        double proximity_function_val, proximity_function_der;
+        compute_proximity_function_and_der(distance, sigma_cutoff, proximity_function_val, proximity_function_der);
+        number_density[i] += proximity_function_val;
+      }
+    }
+    nooc_probability[i] = threshold_prob_from_cv(itype, number_density[i]);
+    printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, number_density[i], nooc_probability[i], cv_thresholds[itype], itype);
+    number_density[i] = 0;
+  }
+
+
 
   	for (ii = 0; ii < inum; ii++){
   		i = ilist[ii];
@@ -299,23 +364,14 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 				/*
 				countneigh += 1;
 				*/
-				double w_value = 0.5 * (1.0 - tanh((sqrt(rsq) - sigma_cutoff)/(0.1 * sigma_cutoff)));
-				number_density[i] += w_value;
-				double u_coef = 1.0 - pow(tanh((sqrt(rsq) - sigma_cutoff)/(0.1 * sigma_cutoff)),2.0);
-				double fx = u_coef * delx/sqrt(rsq);
-				double fy = u_coef * dely/sqrt(rsq);
-				double fz = u_coef * delz/sqrt(rsq);
+        double distance = sqrt(rsq);
+        double proximity_function_val, proximity_function_der;
+        compute_proximity_function_and_der(distance, sigma_cutoff, proximity_function_val, proximity_function_der);
 
-				U[i] += u_coef/sqrt(rsq);
-				dW[i][0] += fx;
-				dW[i][1] += fy;
-				dW[i][2] += fz;
-				/* This part is for half-neighbor list
-      				number_density[j] += w_value;
-					dW[j][0] -= fx;
-      				dW[j][1] -= fy;
-      				dW[j][2] -= fz;
-				*/
+        number_density[i] += proximity_function_val;
+				dW[i][0] = proximity_function_der * delx / distance;
+				dW[i][1] = proximity_function_der * dely / distance;
+				dW[i][2] = proximity_function_der * delz / distance;
 
 				/* Calculation check part from the tag position of the atom
 				if( atom->tag[i] == 1 | atom->tag[j] == 1){
@@ -878,6 +934,8 @@ void PairMSUCG_NEIGH::allocate()
   memory->create(offset,n+1,n+1,"pair:offset");
 
   memory->create(type_linked, n+1, "pair:type_linked"); /*---YP--- Allocate coeff link array */
+
+  memory->create(cv_thresholds, n+1, "pair:cv_thresholds"); /*---YP--- Allocate cv thresholds for calculating state probabilities */
 }
 
 /* ----------------------------------------------------------------------
@@ -891,6 +949,7 @@ void PairMSUCG_NEIGH::settings(int narg, char **arg)
   cut_global = force->numeric(FLERR,arg[0]);
   sigma_cutoff =  atof(arg[1]);
   p_constant = atof(arg[2]);
+
   // reset cutoffs that have been explicitly set
 
   if (allocated) {
@@ -933,6 +992,11 @@ void PairMSUCG_NEIGH::coeff(int narg, char **arg)
       setflag[i][j] = 1;
       count++;
     }
+  }
+
+  // Dummy for reading in type state thresholds.
+  for (int i = 1; i <= atom->ntypes; i++) {
+    cv_thresholds[i] = p_constant;
   }
 
   if (count == 0) error->all(FLERR,"Incorrect args for pair coefficients");

@@ -1,3 +1,4 @@
 *.aux
 *.synctex.gz
 *.log
+update_msucg_repo.sh
