@@ -50,6 +50,7 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   nmax = 0;
 
   nooc_probability = NULL;
+  nooc_probability_force = NULL;
   
   number_density = NULL;
   dW = NULL;
@@ -59,8 +60,8 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   subforce_4 = NULL;
   totalforce = NULL;
 
-  comm_reverse = 5;
-  comm_forward = 5;
+  comm_reverse = 6;
+  comm_forward = 6;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -174,6 +175,7 @@ int PairMSUCG_NEIGH::pack_reverse_comm(int n, int first, double *buf)
     buf[m++] = dW[i][2];
 
     buf[m++] = nooc_probability[i];
+    buf[m++] = nooc_probability_force[i];
   }
   return m;
 }
@@ -205,6 +207,7 @@ int PairMSUCG_NEIGH::pack_forward_comm(int n, int *list, double *buf)
     buf[m++] = dW[j][1];
     buf[m++] = dW[j][2];
     buf[m++] = nooc_probability[j];
+    buf[m++] = nooc_probability_force[j];
   }
   return m;
 }
@@ -281,6 +284,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     	memory->grow(totalforce, nall, 3, "pair/msucg:totalforce");
 
       memory->grow(nooc_probability, nall, "pair/msucg:nooc_probability");
+      memory->grow(nooc_probability_force, nall, "pair/msucg:nooc_probability_force");
   	}
 
   	for(int i=0; i<nall; i++)
@@ -293,6 +297,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
   		totalforce[i][0] = totalforce[i][1] = totalforce[i][2] = 0.0;
 
       nooc_probability[i] = 0.0;
+      nooc_probability_force[i] = 0.0;
  	}
 
   // Calculate the state probabilities.
@@ -321,20 +326,76 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       }
     }
     nooc_probability[i] = threshold_prob_from_cv(itype, number_density[i]);
-    printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, number_density[i], nooc_probability[i], cv_thresholds[itype], itype);
+    // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, number_density[i], nooc_probability[i], cv_thresholds[itype], itype);
     number_density[i] = 0;
   }
+  comm->reverse_comm_pair(this);
+  comm->forward_comm_pair(this);
 
+  // Calculate all forces that do not depend on probability derivatives.
+  for (ii = 0; ii < inum; ii++) {
+    i = ilist[ii];
+    xtmp = x[i][0];
+    ytmp = x[i][1];
+    ztmp = x[i][2];
+    itype = type[i];
+    jlist = firstneigh[i];
+    jnum = numneigh[i];
 
+    for (jj = 0; jj < jnum; jj++) {
+      j = jlist[jj];
+      delx = xtmp - x[j][0];
+      dely = ytmp - x[j][1];
+      delz = ztmp - x[j][2];
+      rsq = delx*delx + dely*dely + delz*delz;
+      jtype = type[j];
 
-  	for (ii = 0; ii < inum; ii++){
-  		i = ilist[ii];
-  		xtmp = x[i][0];
-  		ytmp = x[i][1];
-  		ztmp = x[i][2];
-  		itype = type[i];
-  		jlist = firstneigh[i];
-  		jnum = numneigh[i];
+      if (rsq < 0.25 * cutsq[itype][jtype]) {
+        double r2inv = 1.0 / rsq;
+        double r6inv = r2inv * r2inv * r2inv;
+        // Loop over states for these particles.
+        int alpha = itype;
+        while (alpha != 0) {
+          int beta = jtype;
+          while (beta != 0) {
+            forcelj = r6inv * (lj1[alpha][beta] * r6inv - lj2[alpha][beta]);
+            // Calculate a scaled version of the usual pair force for this pair of states.
+            // (Second subforce term.)
+            fpair = factor_lj * forcelj * r2inv * nooc_probability[i] * nooc_probability[j];
+            f[i][0] += fpair * delx;
+            f[i][1] += fpair * dely;
+            f[i][2] += fpair * delz;
+            // Calculate the scaled contribution of the usual pair energy.
+            evdwl = r6inv*(lj3[alpha][beta]*r6inv-lj4[alpha][beta]) - offset[alpha][beta];
+            evdwl *= factor_lj;
+            energy_lj += evdwl * nooc_probability[i] * nooc_probability[j];
+            nooc_probability_force[i] += nooc_probability[j] * evdwl;
+            // Include in accumulating virial
+            pair_force += fpair;
+            if (beta == 1) {
+              beta = 2;
+            } else if (beta == 2) {
+              beta = 0;
+            }
+          }
+          if (alpha == 1) {
+            alpha = 2;
+          } else if (alpha == 2) {
+            alpha = 0;
+          }
+        }
+      }
+    }
+  }
+
+  for (ii = 0; ii < inum; ii++){
+  	i = ilist[ii];
+  	xtmp = x[i][0];
+  	ytmp = x[i][1];
+  	ztmp = x[i][2];
+  	itype = type[i];
+  	jlist = firstneigh[i];
+  	jnum = numneigh[i];
 	/* Calculation check */
 	/*    if(ii == 2){
 	if(countiter ==0){
@@ -635,9 +696,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 		  /* Printing section */
 		  if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
     } /* End of j loop */
-		totalforce[i][0] = subforce_1[i][0] + subforce_2[i][0] + subforce_3[i][0] + subforce_4[i][0];
-		totalforce[i][1] = subforce_1[i][1] + subforce_2[i][1] + subforce_3[i][1] + subforce_4[i][1];
-		totalforce[i][2] = subforce_1[i][2] + subforce_2[i][2] + subforce_3[i][2] + subforce_4[i][2];
+		totalforce[i][0] = subforce_1[i][0] + subforce_3[i][0] + subforce_4[i][0];
+		totalforce[i][1] = subforce_1[i][1] + subforce_3[i][1] + subforce_4[i][1];
+		totalforce[i][2] = subforce_1[i][2] + subforce_3[i][2] + subforce_4[i][2];
 		f[i][0] += totalforce[i][0];
 		f[i][1] += totalforce[i][1];
 		f[i][2] += totalforce[i][2];

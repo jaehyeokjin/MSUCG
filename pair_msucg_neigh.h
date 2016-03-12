@@ -80,7 +80,7 @@ class PairMSUCG_NEIGH : public Pair {
   double **subforce_1, **subforce_2, **subforce_3, **subforce_4, **totalforce;
   double nmax;
 
-  double *nooc_probability;
+  double *nooc_probability, *nooc_probability_force;
 
   int pack_reverse_comm(int, int, double *);
   void unpack_reverse_comm(int, int *, double *);
