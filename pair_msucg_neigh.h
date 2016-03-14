@@ -74,8 +74,6 @@ class PairMSUCG_NEIGH : public Pair {
   double probability_from_threshold_cv(int, int, double);
 
   double *cv_thresholds;
-  double threshold_prob_from_cv(int, double);
-  double threshold_prob_der_from_prob(double);
   void threshold_prob_and_partial_from_cv(int, double, double&, double&);
 
   double *number_density, **dW;
