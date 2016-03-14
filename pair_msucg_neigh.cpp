@@ -94,8 +94,7 @@ int PairMSUCG_NEIGH::pack_reverse_comm(int n, int first, double *buf)
 
   m = 0;
   last = first + n;
-  for (i = first; i < last; i++)
-  {
+  for (i = first; i < last; i++) {
     buf[m++] = nooc_probability[i];
     buf[m++] = nooc_probability_partial[i];
     buf[m++] = nooc_probability_force[i];
@@ -121,7 +120,7 @@ int PairMSUCG_NEIGH::pack_forward_comm(int n, int *list, double *buf)
   int i,j,m;
 
   m = 0;
-  for (i = 0; i < n; i++){
+  for (i = 0; i < n; i++) {
     j = list[i];
     buf[m++] = nooc_probability[j];
     buf[m++] = nooc_probability_partial[j];
@@ -145,13 +144,13 @@ void PairMSUCG_NEIGH::unpack_forward_comm(int n, int first, double *buf)
 
 /* ---------------------------------------------------------------------- */
 
-double compute_proximity_function(double distance, double sigma) {
-  double tanh_factor = tanh((distance - sigma) / (0.1 * sigma));
+double compute_proximity_function(double distance, double distance_threshold) {
+  double tanh_factor = tanh((distance - distance_threshold) / (0.1 * distance_threshold));
   return 0.5 * (1.0 - tanh_factor);
 }
 
-double compute_proximity_function_der(double distance, double sigma) {
-  double tanh_factor = tanh((distance - sigma) / (0.1 * sigma));
+double compute_proximity_function_der(double distance, double distance_threshold) {
+  double tanh_factor = tanh((distance - distance_threshold) / (0.1 * distance_threshold));
   return -0.5 * (1.0 - tanh_factor * tanh_factor);
 }
 
@@ -159,22 +158,20 @@ double compute_proximity_function_der(double distance, double sigma) {
 
 void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 {
-	int i,j,k,ii,jj,kk,inum,jnum,itype,jtype,ktype;
-	double xtmp,ytmp,ztmp,delx,dely,delz,evdwl,evdwl_jk_1,evdwl_jk_2,fpair;
+	int i,j,ii,jj,inum,jnum,itype,jtype;
+	double xtmp,ytmp,ztmp,delx,dely,delz,evdwl,fpair;
 	double rsq,r2inv,r6inv,forcelj,factor_lj;
+  double distance,inumber_density,cv_force;
+  int alpha,beta;
+  double alphaprob,betaprob;
 	/* Additional parameter */
-	double rsqik, rsqjk, r2jkinv, r6jkinv, r2ikinv, r6ikinv, ffactor_jk;
-	double deljkx, deljky, deljkz, delikx, deliky, delikz;
-	double sech_one, sech_one_k, sech_one_j;
-	int *ilist,*jlist,*klist,*numneigh,**firstneigh;
-	double p_print;
-	double w_value, u_coef;
+	int *ilist,*jlist,*numneigh,**firstneigh;
 
   double pair_force; // For updating in the ev_tally routine
   double energy_lj; // Energy routine for ev_tally routine
   /*  = (double *)malloc(sizeof(double)*3) */
-  evdwl = evdwl_jk_1 = evdwl_jk_2 = 0.0;
-  if (eflag || vflag) ev_setup(eflag,vflag);
+  evdwl = 0.0;
+  if (eflag || vflag) ev_setup(eflag, vflag);
   else evflag = vflag_fdotr = 0;
 
 	double **x = atom->x;
@@ -183,7 +180,6 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 	int nlocal = atom->nlocal;
 	double *special_lj = force->special_lj;
 	int newton_pair = force->newton_pair;
-	double energy_ij;
 
   inum = list->inum;
   ilist = list->ilist;
@@ -198,7 +194,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     memory->grow(nooc_probability_force, nall, "pair/msucg:nooc_probability_force");
   }
 
-  for( int i = 0; i < nall; i++) {
+  for(i = 0; i < nall; i++) {
       nooc_probability[i] = 0.0;
       nooc_probability_partial[i] = 0.0;
       nooc_probability_force[i] = 0.0;
@@ -211,10 +207,10 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     ytmp = x[i][1];
     ztmp = x[i][2];
     itype = type[i];
+    inumber_density = 0.0;
     jlist = firstneigh[i];
     jnum = numneigh[i];
-    double inumber_density = 0.0;
-
+    
     for (jj = 0; jj < jnum; jj++) {
       j = jlist[jj];
       delx = xtmp - x[j][0];
@@ -224,7 +220,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       jtype = type[j];
 
       if (rsq < 0.25 * cutsq[itype][jtype]) {
-        double distance = sqrt(rsq);
+        distance = sqrt(rsq);
         inumber_density += compute_proximity_function(distance, sigma_cutoff);
       }
     }
@@ -254,18 +250,16 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       jtype = type[j];
 
       if (rsq < 0.25 * cutsq[itype][jtype]) {
-        double r2inv = 1.0 / rsq;
-        double r6inv = r2inv * r2inv * r2inv;
+        r2inv = 1.0 / rsq;
+        r6inv = r2inv * r2inv * r2inv;
         // Loop over states for these particles.
-        for (int alpha = 1; alpha <= 2; alpha++) {
-          double alphaprob;
+        for (alpha = 1; alpha <= 2; alpha++) {
           if (alpha == 1) {
             alphaprob = nooc_probability[i];
           } else if (alpha == 2) {
             alphaprob = (1 - nooc_probability[i]);
           }
-          for (int beta = 1; beta <= 2; beta++) {
-            double betaprob;
+          for (beta = 1; beta <= 2; beta++) {
             if (beta == 1) {
               betaprob = nooc_probability[j];
             } else if (beta == 2) {
@@ -308,7 +302,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     jlist = firstneigh[i];
     jnum = numneigh[i];
 
-    double cv_force = nooc_probability_force[i] * nooc_probability_partial[i];
+    cv_force = nooc_probability_force[i] * nooc_probability_partial[i];
 
     for (jj = 0; jj < jnum; jj++) {
       j = jlist[jj];
@@ -320,7 +314,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 
       if (rsq < 0.25 * cutsq[itype][jtype]) {
         // Use the force against the state distribution to calculate forces.
-        double distance = sqrt(rsq);
+        distance = sqrt(rsq);
         fpair = cv_force * compute_proximity_function_der(itype, distance) / distance;
         // Calculate a scaled version of the usual pair force for this pair of states.
         // (Third and fourth subforce term.)
