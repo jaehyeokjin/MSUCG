@@ -50,6 +50,7 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   nmax = 0;
 
   nooc_probability = NULL;
+  nooc_probability_partial = NULL;
   nooc_probability_force = NULL;
   
   number_density = NULL;
@@ -60,8 +61,8 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   subforce_4 = NULL;
   totalforce = NULL;
 
-  comm_reverse = 6;
-  comm_forward = 6;
+  comm_reverse = 7;
+  comm_forward = 7;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -138,6 +139,18 @@ double PairMSUCG_NEIGH::threshold_prob_from_cv(int type, double cv) {
   return 0.5 + 0.5 * tanh((cv - cv_thresholds[type]) / (0.1 * cv_thresholds[type]));
 }
 
+double PairMSUCG_NEIGH::threshold_prob_der_from_prob(double prob) {
+  double tanh_factor = 2 * (prob - 0.5);
+  return 1.0 - tanh_factor * tanh_factor;
+}
+
+void PairMSUCG_NEIGH::threshold_prob_and_partial_from_cv(int type, double cv, double &prob, double &partial) {
+  double tanh_factor = tanh((cv - cv_thresholds[type]) / (0.1 * cv_thresholds[type]));
+  prob = 0.5 + 0.5 * tanh_factor;
+  partial = 1.0 - tanh_factor * tanh_factor;
+}
+
+
 double PairMSUCG_NEIGH::probability_from_threshold_cv(int type, int state, double w)
 {
   // Check that the state is a valid state for this type.
@@ -175,6 +188,7 @@ int PairMSUCG_NEIGH::pack_reverse_comm(int n, int first, double *buf)
     buf[m++] = dW[i][2];
 
     buf[m++] = nooc_probability[i];
+    buf[m++] = nooc_probability_partial[i];
     buf[m++] = nooc_probability_force[i];
   }
   return m;
@@ -192,6 +206,8 @@ void PairMSUCG_NEIGH::unpack_reverse_comm(int n, int *list, double *buf)
     dW[j][1] += buf[m++];
     dW[j][2] += buf[m++];
     nooc_probability[j] += buf[m++];
+    nooc_probability_partial[j] += buf[m++];
+    nooc_probability_force[j] += buf[m++];
   }
 }
 
@@ -207,6 +223,7 @@ int PairMSUCG_NEIGH::pack_forward_comm(int n, int *list, double *buf)
     buf[m++] = dW[j][1];
     buf[m++] = dW[j][2];
     buf[m++] = nooc_probability[j];
+    buf[m++] = nooc_probability_partial[j];
     buf[m++] = nooc_probability_force[j];
   }
   return m;
@@ -224,7 +241,19 @@ void PairMSUCG_NEIGH::unpack_forward_comm(int n, int first, double *buf)
     dW[i][1] += buf[m++];
     dW[i][2] += buf[m++];
     nooc_probability[i] += buf[m++];
+    nooc_probability_partial[i] += buf[m++];
+    nooc_probability_force[i] += buf[m++];
   }
+}
+
+double compute_proximity_function(double distance, double sigma) {
+  double tanh_factor = tanh((distance - sigma) / (0.1 * sigma));
+  return 0.5 * (1.0 - tanh_factor);
+}
+
+double compute_proximity_function_der(double distance, double sigma) {
+  double tanh_factor = tanh((distance - sigma) / (0.1 * sigma));
+  return 1.0 - tanh_factor * tanh_factor;
 }
 
 void compute_proximity_function_and_der(double distance, double sigma, double &proximity_val, double &proximity_der) {
@@ -284,6 +313,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     	memory->grow(totalforce, nall, 3, "pair/msucg:totalforce");
 
       memory->grow(nooc_probability, nall, "pair/msucg:nooc_probability");
+      memory->grow(nooc_probability_partial, nall, "pair/msucg:nooc_probability_partial");
       memory->grow(nooc_probability_force, nall, "pair/msucg:nooc_probability_force");
   	}
 
@@ -297,6 +327,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
   		totalforce[i][0] = totalforce[i][1] = totalforce[i][2] = 0.0;
 
       nooc_probability[i] = 0.0;
+      nooc_probability_partial[i] = 0.0;
       nooc_probability_force[i] = 0.0;
  	}
 
@@ -320,12 +351,10 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 
       if (rsq < 0.25 * cutsq[itype][jtype]) {
         double distance = sqrt(rsq);
-        double proximity_function_val, proximity_function_der;
-        compute_proximity_function_and_der(distance, sigma_cutoff, proximity_function_val, proximity_function_der);
-        number_density[i] += proximity_function_val;
+        number_density[i] += compute_proximity_function(distance, sigma_cutoff);
       }
     }
-    nooc_probability[i] = threshold_prob_from_cv(itype, number_density[i]);
+    threshold_prob_and_partial_from_cv(itype, number_density[i], nooc_probability[i], nooc_probability_partial[i]);
     // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, number_density[i], nooc_probability[i], cv_thresholds[itype], itype);
     number_density[i] = 0;
   }
@@ -384,6 +413,44 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             alpha = 0;
           }
         }
+      }
+    }
+  }
+  comm->reverse_comm_pair(this);
+  comm->forward_comm_pair(this);
+
+  // Calculate forces from probability derivatives.
+  for (ii = 0; ii < inum; ii++) {
+    i = ilist[ii];
+    xtmp = x[i][0];
+    ytmp = x[i][1];
+    ztmp = x[i][2];
+    itype = type[i];
+    jlist = firstneigh[i];
+    jnum = numneigh[i];
+
+    double cv_force = nooc_probability_force[i] * nooc_probability_partial[i];
+
+    for (jj = 0; jj < jnum; jj++) {
+      j = jlist[jj];
+      delx = xtmp - x[j][0];
+      dely = ytmp - x[j][1];
+      delz = ztmp - x[j][2];
+      rsq = delx*delx + dely*dely + delz*delz;
+      jtype = type[j];
+
+      if (rsq < 0.25 * cutsq[itype][jtype]) {
+        // Use the force against the state distribution to calculate forces.
+        double distance = sqrt(rsq);
+        fpair = cv_force * compute_proximity_function_der(itype, distance);
+        // Calculate a scaled version of the usual pair force for this pair of states.
+        // (Third and fourth subforce term.)
+        f[i][0] += fpair * delx / distance;
+        f[i][1] += fpair * dely / distance;
+        f[i][2] += fpair * delz / distance;
+        f[j][0] -= fpair * delx / distance;
+        f[j][1] -= fpair * dely / distance;
+        f[j][2] -= fpair * delz / distance;
       }
     }
   }
@@ -696,9 +763,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 		  /* Printing section */
 		  if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
     } /* End of j loop */
-		totalforce[i][0] = subforce_1[i][0] + subforce_3[i][0] + subforce_4[i][0];
-		totalforce[i][1] = subforce_1[i][1] + subforce_3[i][1] + subforce_4[i][1];
-		totalforce[i][2] = subforce_1[i][2] + subforce_3[i][2] + subforce_4[i][2];
+		totalforce[i][0] = subforce_1[i][0];
+		totalforce[i][1] = subforce_1[i][1];
+		totalforce[i][2] = subforce_1[i][2];
 		f[i][0] += totalforce[i][0];
 		f[i][1] += totalforce[i][1];
 		f[i][2] += totalforce[i][2];

@@ -75,12 +75,14 @@ class PairMSUCG_NEIGH : public Pair {
 
   double *cv_thresholds;
   double threshold_prob_from_cv(int, double);
+  double threshold_prob_der_from_prob(double);
+  void threshold_prob_and_partial_from_cv(int, double, double&, double&);
 
   double *number_density, **dW;
   double **subforce_1, **subforce_2, **subforce_3, **subforce_4, **totalforce;
   double nmax;
 
-  double *nooc_probability, *nooc_probability_force;
+  double *nooc_probability, *nooc_probability_partial, *nooc_probability_force;
 
   int pack_reverse_comm(int, int, double *);
   void unpack_reverse_comm(int, int *, double *);
