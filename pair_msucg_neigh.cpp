@@ -138,7 +138,7 @@ double PairMSUCG_NEIGH::P(int type, int state, double *x, double *f, double w, d
 void PairMSUCG_NEIGH::threshold_prob_and_partial_from_cv(int type, double cv, double &prob, double &partial) {
   double tanh_factor = tanh((cv - cv_thresholds[type]) / (0.1 * cv_thresholds[type]));
   prob = 0.5 + 0.5 * tanh_factor;
-  partial = 1.0 - tanh_factor * tanh_factor;
+  partial = 0.5 * (1.0 - tanh_factor * tanh_factor);
 }
 
 double PairMSUCG_NEIGH::probability_from_threshold_cv(int type, int state, double w)
@@ -243,13 +243,13 @@ double compute_proximity_function(double distance, double sigma) {
 
 double compute_proximity_function_der(double distance, double sigma) {
   double tanh_factor = tanh((distance - sigma) / (0.1 * sigma));
-  return 1.0 - tanh_factor * tanh_factor;
+  return -0.5 * (1.0 - tanh_factor * tanh_factor);
 }
 
 void compute_proximity_function_and_der(double distance, double sigma, double &proximity_val, double &proximity_der) {
   double tanh_factor = tanh((distance - sigma) / (0.1 * sigma));
   proximity_val = 0.5 * (1.0 - tanh_factor);
-  proximity_der = 1.0 - tanh_factor * tanh_factor;
+  proximity_der = -0.5 * (1.0 - tanh_factor * tanh_factor);
 }
 
 void PairMSUCG_NEIGH::compute(int eflag, int vflag)
@@ -332,7 +332,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       delx = xtmp - x[j][0];
       dely = ytmp - x[j][1];
       delz = ztmp - x[j][2];
-      rsq = delx*delx + dely*dely + delz*delz;
+      rsq = delx * delx + dely * dely + delz * delz;
       jtype = type[j];
 
       if (rsq < 0.25 * cutsq[itype][jtype]) {
@@ -363,7 +363,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       delx = xtmp - x[j][0];
       dely = ytmp - x[j][1];
       delz = ztmp - x[j][2];
-      rsq = delx*delx + dely*dely + delz*delz;
+      rsq = delx * delx + dely * dely + delz * delz;
       jtype = type[j];
 
       if (rsq < 0.25 * cutsq[itype][jtype]) {
@@ -396,9 +396,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             evdwl *= factor_lj;
             energy_lj += evdwl * alphaprob * betaprob;
             if (alpha == 1) {
-              nooc_probability_force[i] += betaprob * evdwl;
-            } else if (alpha == 2) {
               nooc_probability_force[i] -= betaprob * evdwl;
+            } else if (alpha == 2) {
+              nooc_probability_force[i] += betaprob * evdwl;
             }
             // Include in accumulating virial
             pair_force += fpair;
@@ -428,7 +428,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       delx = xtmp - x[j][0];
       dely = ytmp - x[j][1];
       delz = ztmp - x[j][2];
-      rsq = delx*delx + dely*dely + delz*delz;
+      rsq = delx * delx + dely * dely + delz * delz;
       jtype = type[j];
 
       if (rsq < 0.25 * cutsq[itype][jtype]) {
