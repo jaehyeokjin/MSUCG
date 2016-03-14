@@ -52,17 +52,9 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   nooc_probability = NULL;
   nooc_probability_partial = NULL;
   nooc_probability_force = NULL;
-  
-  number_density = NULL;
-  dW = NULL;
-  subforce_1 = NULL;
-  subforce_2 = NULL;
-  subforce_3 = NULL;
-  subforce_4 = NULL;
-  totalforce = NULL;
 
-  comm_reverse = 7;
-  comm_forward = 7;
+  comm_reverse = 3;
+  comm_forward = 3;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -88,78 +80,10 @@ PairMSUCG_NEIGH::~PairMSUCG_NEIGH()
 
 /* ---------------------------------------------------------------------- */
 
-/*---YP--- Function Name: P
-/*---YP--- Purpose: Calcutating state probability and its partial deriv
-/*---YP--- Number of Parameters: 3
-/*---YP--- Parameters:
-/*---YP---    type - type of particle
-/*---YP---    x    - coordinates of particle
-/*---YP---    f    - partial derivative (force)
-/*---YP--- Return value: probability
-*/
-
-double PairMSUCG_NEIGH::P(int type, int state, double *x, double *f, double w, double *uval, int calc_cross_der)
-{
-    double tanhfactor = tanh((w - p_constant)/(0.1 * p_constant));
-    double p = 0.5 * (1 + tanhfactor);
-    double factor_p = 1.0/(0.04 * p_constant * sigma_cutoff) * (1.0 - tanhfactor * tanhfactor);
-
-    if(state==1 || state==3)
-    {
-      if (calc_cross_der) {
-        f[0] = -1.0 * factor_p;
-        f[1] = -1.0 * factor_p;
-        f[2] = -1.0 * factor_p;
-        return p; 
-      } else {
-        f[0] = -1.0 * factor_p * uval[0];
-        f[1] = -1.0 * factor_p * uval[1];
-        f[2] = -1.0 * factor_p * uval[2];
-        return p;
-      }
-    }
-    else if(state==2 || state==4)
-    {
-      if (calc_cross_der) {
-        f[0] = 1.0 * factor_p;
-        f[1] = 1.0 * factor_p;
-        f[2] = 1.0 * factor_p;
-        return 1.0-p;
-      } else {
-        f[0] = 1.0 * factor_p * uval[0];
-        f[1] = 1.0 * factor_p * uval[1];
-        f[2] = 1.0 * factor_p * uval[2];
-        return 1.0-p;
-      }
-    }
-  else error->one(FLERR, "Wrong type");
-}
-
 void PairMSUCG_NEIGH::threshold_prob_and_partial_from_cv(int type, double cv, double &prob, double &partial) {
   double tanh_factor = tanh((cv - cv_thresholds[type]) / (0.1 * cv_thresholds[type]));
   prob = 0.5 + 0.5 * tanh_factor;
   partial = 0.5 * (1.0 - tanh_factor * tanh_factor);
-}
-
-double PairMSUCG_NEIGH::probability_from_threshold_cv(int type, int state, double w)
-{
-  // Check that the state is a valid state for this type.
-  if (state != 1 && state != 2) {
-    char errstring[64];
-    sprintf(errstring, "Unknown state index %d for type %d", state, type);
-    error->one(FLERR, errstring);
-  }
-
-  // Calculate the probability for this state.
-  double tanhfactor = tanh((w - p_constant)/(0.1 * p_constant));
-  double prob_state_1 = 0.5 * (1 + tanhfactor);
-  if (state == 1) {
-    return prob_state_1;
-  } else if (state == 2) {
-    return 1 - prob_state_1;
-  } else {
-    return 1.0;
-  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -172,11 +96,6 @@ int PairMSUCG_NEIGH::pack_reverse_comm(int n, int first, double *buf)
   last = first + n;
   for (i = first; i < last; i++)
   {
-    buf[m++] = number_density[i];
-    buf[m++] = dW[i][0];
-    buf[m++] = dW[i][1];
-    buf[m++] = dW[i][2];
-
     buf[m++] = nooc_probability[i];
     buf[m++] = nooc_probability_partial[i];
     buf[m++] = nooc_probability_force[i];
@@ -191,10 +110,6 @@ void PairMSUCG_NEIGH::unpack_reverse_comm(int n, int *list, double *buf)
   m = 0;
   for (i = 0; i < n; i++) {
     j = list[i];
-    number_density[j] += buf[m++];
-    dW[j][0] += buf[m++];
-    dW[j][1] += buf[m++];
-    dW[j][2] += buf[m++];
     nooc_probability[j] += buf[m++];
     nooc_probability_partial[j] += buf[m++];
     nooc_probability_force[j] += buf[m++];
@@ -208,10 +123,6 @@ int PairMSUCG_NEIGH::pack_forward_comm(int n, int *list, double *buf)
   m = 0;
   for (i = 0; i < n; i++){
     j = list[i];
-    buf[m++] = number_density[j];
-    buf[m++] = dW[j][0];
-    buf[m++] = dW[j][1];
-    buf[m++] = dW[j][2];
     buf[m++] = nooc_probability[j];
     buf[m++] = nooc_probability_partial[j];
     buf[m++] = nooc_probability_force[j];
@@ -226,15 +137,13 @@ void PairMSUCG_NEIGH::unpack_forward_comm(int n, int first, double *buf)
   m = 0;
   last = first + n;
   for (i = first; i < last; i++) {
-    number_density[i] += buf[m++];
-    dW[i][0] += buf[m++];
-    dW[i][1] += buf[m++];
-    dW[i][2] += buf[m++];
     nooc_probability[i] += buf[m++];
     nooc_probability_partial[i] += buf[m++];
     nooc_probability_force[i] += buf[m++];
   }
 }
+
+/* ---------------------------------------------------------------------- */
 
 double compute_proximity_function(double distance, double sigma) {
   double tanh_factor = tanh((distance - sigma) / (0.1 * sigma));
@@ -246,11 +155,7 @@ double compute_proximity_function_der(double distance, double sigma) {
   return -0.5 * (1.0 - tanh_factor * tanh_factor);
 }
 
-void compute_proximity_function_and_der(double distance, double sigma, double &proximity_val, double &proximity_der) {
-  double tanh_factor = tanh((distance - sigma) / (0.1 * sigma));
-  proximity_val = 0.5 * (1.0 - tanh_factor);
-  proximity_der = -0.5 * (1.0 - tanh_factor * tanh_factor);
-}
+/* ---------------------------------------------------------------------- */
 
 void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 {
@@ -286,32 +191,14 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
   firstneigh = list->firstneigh;
 
   int nall = nlocal + atom->nghost;
-	if(nall > nmax)
-  	{
-    	nmax = nall;
-    	memory->grow(number_density, nall, "pair/msucg:number_density");
-    	memory->grow(dW, nall, 3, "pair/msucg:dW");
-    	/* Subforce initialization */
-    	memory->grow(subforce_1, nall, 3, "pair/msucg:subforce_1");
-    	memory->grow(subforce_2, nall, 3, "pair/msucg:subforce_2");
-    	memory->grow(subforce_3, nall, 3, "pair/msucg:subforce_3");
-    	memory->grow(subforce_4, nall, 3, "pair/msucg:subforce_4");
-    	memory->grow(totalforce, nall, 3, "pair/msucg:totalforce");
+	if (nall > nmax) {
+  	nmax = nall;
+    memory->grow(nooc_probability, nall, "pair/msucg:nooc_probability");
+    memory->grow(nooc_probability_partial, nall, "pair/msucg:nooc_probability_partial");
+    memory->grow(nooc_probability_force, nall, "pair/msucg:nooc_probability_force");
+  }
 
-      memory->grow(nooc_probability, nall, "pair/msucg:nooc_probability");
-      memory->grow(nooc_probability_partial, nall, "pair/msucg:nooc_probability_partial");
-      memory->grow(nooc_probability_force, nall, "pair/msucg:nooc_probability_force");
-  	}
-
-  	for(int i=0; i<nall; i++)
-  	{
-  		number_density[i] = dW[i][0] = dW[i][1] = dW[i][2] = 0.0;
-  		subforce_1[i][0] = subforce_1[i][1] = subforce_1[i][2] = 0.0;
-  		subforce_2[i][0] = subforce_2[i][1] = subforce_2[i][2] = 0.0;
-  		subforce_3[i][0] = subforce_3[i][1] = subforce_3[i][2] = 0.0;
-  		subforce_4[i][0] = subforce_4[i][1] = subforce_4[i][2] = 0.0;
-  		totalforce[i][0] = totalforce[i][1] = totalforce[i][2] = 0.0;
-
+  for( int i = 0; i < nall; i++) {
       nooc_probability[i] = 0.0;
       nooc_probability_partial[i] = 0.0;
       nooc_probability_force[i] = 0.0;
@@ -326,6 +213,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     itype = type[i];
     jlist = firstneigh[i];
     jnum = numneigh[i];
+    double inumber_density = 0.0;
 
     for (jj = 0; jj < jnum; jj++) {
       j = jlist[jj];
@@ -337,12 +225,11 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 
       if (rsq < 0.25 * cutsq[itype][jtype]) {
         double distance = sqrt(rsq);
-        number_density[i] += compute_proximity_function(distance, sigma_cutoff);
+        inumber_density += compute_proximity_function(distance, sigma_cutoff);
       }
     }
-    threshold_prob_and_partial_from_cv(itype, number_density[i], nooc_probability[i], nooc_probability_partial[i]);
-    // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, number_density[i], nooc_probability[i], cv_thresholds[itype], itype);
-    number_density[i] = 0;
+    threshold_prob_and_partial_from_cv(itype, inumber_density, nooc_probability[i], nooc_probability_partial[i]);
+    // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, inumber_density, nooc_probability[i], cv_thresholds[itype], itype);
   }
   comm->reverse_comm_pair(this);
   comm->forward_comm_pair(this);
@@ -817,8 +704,8 @@ void PairMSUCG_NEIGH::coeff(int narg, char **arg)
 
   double cut_one = cut_global;
 
-  /*---YP--- Change the original definition for coefficient 5
-  /*--- if (narg == 5) cut_one = force->numeric(FLERR,arg[4]); */
+  // ---YP--- Change the original definition for coefficient 5
+  // --- if (narg == 5) cut_one = force->numeric(FLERR,arg[4]);
   if(narg == 5 && strcmp(arg[0], arg[1])==0) type_linked[atoi(arg[0])] = atoi(arg[4]); /*--- Add Linking list informatin here */
 
   int count = 0;

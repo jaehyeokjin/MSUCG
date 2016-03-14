@@ -69,18 +69,12 @@ class PairMSUCG_NEIGH : public Pair {
   /* Force check parameter */
   int countiter;
   int countneigh;
-  //  Function calculating P(i,_a) and its partial derivative
-  double P(int, int, double*, double*, double, double*, int); 
-  double probability_from_threshold_cv(int, int, double);
 
   double *cv_thresholds;
   void threshold_prob_and_partial_from_cv(int, double, double&, double&);
-
-  double *number_density, **dW;
-  double **subforce_1, **subforce_2, **subforce_3, **subforce_4, **totalforce;
-  double nmax;
-
   double *nooc_probability, *nooc_probability_partial, *nooc_probability_force;
+
+  double nmax;
 
   int pack_reverse_comm(int, int, double *);
   void unpack_reverse_comm(int, int *, double *);
