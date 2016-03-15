@@ -43,6 +43,8 @@ class PairMSUCG_NEIGH : public Pair {
   double single(int, int, int, int, double, double, double, double &);
   void *extract(const char *, int &);
 
+  void read_state_settings(const char*);
+
   void compute_inner();
   void compute_middle();
   void compute_outer(int, int);
@@ -70,8 +72,17 @@ class PairMSUCG_NEIGH : public Pair {
   int countiter;
   int countneigh;
 
-  int n_states;
+  int n_total_states;
+  int n_actual_types;
+  int *actual_types_from_state;
+  int *n_states_per_type;
   double *cv_thresholds;
+  double *threshold_radii;
+  double *chemical_potentials;
+  
+  double compute_proximity_function(int, double);
+  double compute_proximity_function_der(int, double);
+
   void threshold_prob_and_partial_from_cv(int, double, double&, double&);
   double *nooc_probability, *nooc_probability_partial, *nooc_probability_force;
 
