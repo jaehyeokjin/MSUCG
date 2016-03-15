@@ -49,6 +49,7 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   countneigh = 0;
   nmax = 0;
 
+  n_states = 2;
   nooc_probability = NULL;
   nooc_probability_partial = NULL;
   nooc_probability_force = NULL;
@@ -211,6 +212,8 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     jlist = firstneigh[i];
     jnum = numneigh[i];
     
+    // For each particle, calculate the CV that controls 
+    // the state probability, in this case density.
     for (jj = 0; jj < jnum; jj++) {
       j = jlist[jj];
       delx = xtmp - x[j][0];
@@ -224,14 +227,17 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
         inumber_density += compute_proximity_function(distance, sigma_cutoff);
       }
     }
+
+    // Keep track of the probability and its partial derivative.
     threshold_prob_and_partial_from_cv(itype, inumber_density, nooc_probability[i], nooc_probability_partial[i]);
     // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, inumber_density, nooc_probability[i], cv_thresholds[itype], itype);
   }
   // Communicate local state probabilities and partials forward.
   comm->forward_comm_pair(this);
 
-  // Second loop: calculate all forces that do not depend on probability
-  // derivatives and against the state distribution as well.
+  // Second loop: calculate all forces that do not depend on 
+  // probability derivatives and against the state distribution 
+  // as well.
   for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
     xtmp = x[i][0];
@@ -241,26 +247,29 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     jlist = firstneigh[i];
     jnum = numneigh[i];
 
-    // Handle single-body forces.
-    for (alpha = 1; alpha <=2; alpha++) {
+    // Compute single-body forces conjugate to state change.
+    for (alpha = itype; alpha < itype + n_states; alpha++) {
       // Calculate one-body-state entropic forces.
       if (false) {
-        if (alpha == 1) {
+        if (alpha == itype) {
           nooc_probability_force[i] += kT * log(nooc_probability[i]);
-        } else if (alpha == 2) {
+        } else if (alpha == itype + n_states - 1) {
           nooc_probability_force[i] -= kT * log(1 - nooc_probability[i]);
         }
       }
       // Calculate one-body-state potential forces.
       if (false) {
-        if (alpha == 1) {
+        if (alpha == itype) {
           nooc_probability_force[i] += 0.0; // replace 0.0 with one_body_potentials[1];
-        } else if (alpha == 2) {
+        } else if (alpha == itype + n_states - 1) {
           nooc_probability_force[i] -= 0.0; // replace 0.0 with one_body_potentials[2];
         }
       }
     }
 
+    // Compute two-body forces at fixed state and effects of the
+    // two body potential on state change.
+    pair_force = 0.0;
     for (jj = 0; jj < jnum; jj++) {
       j = jlist[jj];
       delx = xtmp - x[j][0];
@@ -272,37 +281,40 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       if (rsq < cutsq[itype][jtype]) {
         r2inv = 1.0 / rsq;
         r6inv = r2inv * r2inv * r2inv;
-        // Loop over states for these particles.
-        for (alpha = 1; alpha <= 2; alpha++) {
-          if (alpha == 1) {
+        // Loop over all combinations of states for these particles.
+        for (alpha = itype; alpha < itype + n_states; alpha++) {
+          if (alpha == itype) {
             alphaprob = nooc_probability[i];
-          } else if (alpha == 2) {
+          } else if (alpha == itype + n_states - 1) {
             alphaprob = (1 - nooc_probability[i]);
           }
-          for (beta = 1; beta <= 2; beta++) {
-            if (beta == 1) {
+          for (beta = jtype; beta < jtype + n_states; beta++) {
+            if (beta == jtype) {
               betaprob = nooc_probability[j];
-            } else if (beta == 2) {
+            } else if (beta == jtype + n_states - 1) {
               betaprob = (1 - nooc_probability[j]);
             }
+            // Calculate the usual force between the particles.
             forcelj = r6inv * (lj1[alpha][beta] * r6inv - lj2[alpha][beta]);
-            // Calculate a scaled version of the usual pair force for this pair of states.
-            // (Second subforce term.)
+            // Scale the usual pair force by current state weights & accumulate.
             fpair = factor_lj * forcelj * r2inv * alphaprob * betaprob;
+            // Accumulate the forces.
             f[i][0] += fpair * delx;
             f[i][1] += fpair * dely;
             f[i][2] += fpair * delz;
-            // Calculate the scaled contribution of the usual pair energy.
+            // Include in accumulating virial.
+            pair_force += fpair;
+            // Calculate the usual pair energy.
             evdwl = r6inv*(lj3[alpha][beta]*r6inv-lj4[alpha][beta]) - offset[alpha][beta];
             evdwl *= factor_lj;
+            // Scale the usual pair force by current state weights & accumulate.
             energy_lj += evdwl * alphaprob * betaprob;
-            if (alpha == 1) {
+            // Apply the state-specific pair energy as a force on state distribution.
+            if (alpha == itype) {
               nooc_probability_force[i] -= betaprob * evdwl;
-            } else if (alpha == 2) {
+            } else if (alpha == itype + n_states - 1) {
               nooc_probability_force[i] += betaprob * evdwl;
             }
-            // Include in accumulating virial
-            pair_force += fpair;
           }
         }
       }
@@ -322,8 +334,11 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     jlist = firstneigh[i];
     jnum = numneigh[i];
 
+    // Convert force against the state to force against the CV
+    // by using the partial of state with respect to CV.
     cv_force = nooc_probability_force[i] * nooc_probability_partial[i];
 
+    // Apply the force against the CV, in this case density.
     for (jj = 0; jj < jnum; jj++) {
       j = jlist[jj];
       delx = xtmp - x[j][0];
@@ -332,12 +347,11 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       rsq = delx * delx + dely * dely + delz * delz;
       jtype = type[j];
 
+      // Distribute the force down to every pair of particles
+      // contributing to the density.
       if (rsq < cutsq[itype][jtype]) {
-        // Use the force against the state distribution to calculate forces.
         distance = sqrt(rsq);
         fpair = cv_force * compute_proximity_function_der(itype, distance) / distance;
-        // Calculate a scaled version of the usual pair force for this pair of states.
-        // (Third and fourth subforce term.)
         f[i][0] += fpair * delx;
         f[i][1] += fpair * dely;
         f[i][2] += fpair * delz;

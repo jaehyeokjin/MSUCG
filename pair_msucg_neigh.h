@@ -70,6 +70,7 @@ class PairMSUCG_NEIGH : public Pair {
   int countiter;
   int countneigh;
 
+  int n_states;
   double *cv_thresholds;
   void threshold_prob_and_partial_from_cv(int, double, double&, double&);
   double *nooc_probability, *nooc_probability_partial, *nooc_probability_force;
