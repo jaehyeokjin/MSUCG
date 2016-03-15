@@ -83,7 +83,7 @@ PairMSUCG_NEIGH::~PairMSUCG_NEIGH()
 void PairMSUCG_NEIGH::threshold_prob_and_partial_from_cv(int type, double cv, double &prob, double &partial) {
   double tanh_factor = tanh((cv - cv_thresholds[type]) / (0.1 * cv_thresholds[type]));
   prob = 0.5 + 0.5 * tanh_factor;
-  partial = 0.5 * (1.0 - tanh_factor * tanh_factor);
+  partial = 0.5 * (1.0 - tanh_factor * tanh_factor)/ (0.1 * cv_thresholds[type]); // Partial has to be divided by (0.1* cv_threshold)
 }
 
 /* ---------------------------------------------------------------------- */
@@ -151,7 +151,8 @@ double compute_proximity_function(double distance, double distance_threshold) {
 
 double compute_proximity_function_der(double distance, double distance_threshold) {
   double tanh_factor = tanh((distance - distance_threshold) / (0.1 * distance_threshold));
-  return -0.5 * (1.0 - tanh_factor * tanh_factor);
+  return 0.5 * (1.0 - tanh_factor * tanh_factor)/ (0.1 * distance_threshold); // functional derivatie has 0.1*distance_threshold in the denominator
+  // Also changed the sign - to + because it will be considered in the nooc_probability_force
 }
 
 /* ---------------------------------------------------------------------- */
@@ -219,19 +220,19 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       rsq = delx * delx + dely * dely + delz * delz;
       jtype = type[j];
 
-      if (rsq < cutsq[itype][jtype]) {
+      if (rsq < 0.25 * cutsq[itype][jtype]) {
         distance = sqrt(rsq);
         inumber_density += compute_proximity_function(distance, sigma_cutoff);
       }
     }
     threshold_prob_and_partial_from_cv(itype, inumber_density, nooc_probability[i], nooc_probability_partial[i]);
-    // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, inumber_density, nooc_probability[i], cv_thresholds[itype], itype);
+    // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d with sigma cutoff : %g \n", i, inumber_density, nooc_probability[i], cv_thresholds[itype], itype, sigma_cutoff);
   }
-  // Communicate local state probabilities and partials forward.
+  comm->reverse_comm_pair(this);
   comm->forward_comm_pair(this);
 
   // Second loop: calculate all forces that do not depend on probability
-  // derivatives and against the state distribution as well.
+  // derivatives.
   for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
     xtmp = x[i][0];
@@ -241,35 +242,18 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     jlist = firstneigh[i];
     jnum = numneigh[i];
 
-    // Handle single-body forces.
-    for (alpha = 1; alpha <=2; alpha++) {
-      // Calculate one-body-state entropic forces.
-      if (false) {
-        if (alpha == 1) {
-          nooc_probability_force[i] += kT * log(nooc_probability[i]);
-        } else if (alpha == 2) {
-          nooc_probability_force[i] -= kT * log(1 - nooc_probability[i]);
-        }
-      }
-      // Calculate one-body-state potential forces.
-      if (false) {
-        if (alpha == 1) {
-          nooc_probability_force[i] += 0.0; // replace 0.0 with one_body_potentials[1];
-        } else if (alpha == 2) {
-          nooc_probability_force[i] -= 0.0; // replace 0.0 with one_body_potentials[2];
-        }
-      }
-    }
-
     for (jj = 0; jj < jnum; jj++) {
+      energy_lj = 0.0; // Initialization of energy_lj and pair_force was missing for each ij pair
+      pair_force = 0.0;
       j = jlist[jj];
+      factor_lj = special_lj[sbmask(j)];  // factor_lj part was missing despite used below?
       delx = xtmp - x[j][0];
       dely = ytmp - x[j][1];
       delz = ztmp - x[j][2];
       rsq = delx * delx + dely * dely + delz * delz;
       jtype = type[j];
 
-      if (rsq < cutsq[itype][jtype]) {
+      if (rsq < 0.25 * cutsq[itype][jtype]) {
         r2inv = 1.0 / rsq;
         r6inv = r2inv * r2inv * r2inv;
         // Loop over states for these particles.
@@ -277,14 +261,15 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
           if (alpha == 1) {
             alphaprob = nooc_probability[i];
           } else if (alpha == 2) {
-            alphaprob = (1 - nooc_probability[i]);
+            alphaprob = (1.0 - nooc_probability[i]);
           }
           for (beta = 1; beta <= 2; beta++) {
             if (beta == 1) {
               betaprob = nooc_probability[j];
             } else if (beta == 2) {
-              betaprob = (1 - nooc_probability[j]);
+              betaprob = (1.0 - nooc_probability[j]);
             }
+            // fprintf(screen, "alpha %d (%d): %g beta %d (%d): %g \n", alpha, i,alphaprob, beta, j,betaprob);
             forcelj = r6inv * (lj1[alpha][beta] * r6inv - lj2[alpha][beta]);
             // Calculate a scaled version of the usual pair force for this pair of states.
             // (Second subforce term.)
@@ -297,21 +282,22 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             evdwl *= factor_lj;
             energy_lj += evdwl * alphaprob * betaprob;
             if (alpha == 1) {
-              nooc_probability_force[i] -= betaprob * evdwl;
+              nooc_probability_force[i] -= 1.0 * betaprob * evdwl;
             } else if (alpha == 2) {
-              nooc_probability_force[i] += betaprob * evdwl;
+              nooc_probability_force[i] += 1.0 * betaprob * evdwl;
             }
             // Include in accumulating virial
             pair_force += fpair;
           }
         }
+        if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz); // ev_tally has to be inside of the j loop? 
       }
     }
-    if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
   }
-  // Communicate local state probability forces forward.
+  
+  comm->reverse_comm_pair(this);
   comm->forward_comm_pair(this);
-
+  
   // Third loop: calculate forces from probability derivatives.
   for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
@@ -332,10 +318,10 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       rsq = delx * delx + dely * dely + delz * delz;
       jtype = type[j];
 
-      if (rsq < cutsq[itype][jtype]) {
+      if (rsq < 0.25 * cutsq[itype][jtype]) {
         // Use the force against the state distribution to calculate forces.
         distance = sqrt(rsq);
-        fpair = cv_force * compute_proximity_function_der(itype, distance) / distance;
+        fpair = cv_force * compute_proximity_function_der(distance, sigma_cutoff) / distance;
         // Calculate a scaled version of the usual pair force for this pair of states.
         // (Third and fourth subforce term.)
         f[i][0] += fpair * delx;
@@ -344,10 +330,54 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
         f[j][0] -= fpair * delx;
         f[j][1] -= fpair * dely;
         f[j][2] -= fpair * delz;
+        
       }
     }
   }
 
+  for (ii = 0; ii < inum; ii++) {
+    i = ilist[ii];
+    fprintf(screen, "Force: (%8.4E, %8.4E, %8.4E) on %d(%8.4E, %8.4E, %8.4E)  \n", f[i][0], f[i][1], f[i][2], i,x[i][0],x[i][1],x[i][2]);
+  }
+
+
+  // Calculate one-body forces (currently none.)
+	//for (ii = 0; ii < inum; ii++) {
+	//	i = ilist[ii];
+	//	xtmp = x[i][0];
+	//	ytmp = x[i][1];
+	//	ztmp = x[i][2];
+	//	itype = type[i];
+	//	jlist = firstneigh[i];
+	//	jnum = numneigh[i];
+  //  int itype = type[i];
+  //  int alpha = itype;
+	//	// Calculate one-body term energies and forces.
+  //  // (First subforce part.)
+  //  
+  //  // Temporarily commented out because having small state
+  //  // weights causes numerical instability.
+	//	while(alpha != 0)
+	//	{
+	//		double ff[3];
+	//		double p = P(itype, alpha, x[i], ff, number_density[i], dW[i], 0);
+  //  
+	//		subforce_1[i][0] += kT * log(p) * ff[0];
+	//		subforce_1[i][1] += kT * log(p) * ff[1];
+	//		subforce_1[i][2] += kT * log(p) * ff[2];
+  //  
+	//		alpha = type_linked[alpha];
+	//	}
+	//	totalforce[i][0] = subforce_1[i][0];
+	//	totalforce[i][1] = subforce_1[i][1];
+	//	totalforce[i][2] = subforce_1[i][2];
+	//	f[i][0] += totalforce[i][0];
+	//	f[i][1] += totalforce[i][1];
+	//	f[i][2] += totalforce[i][2];
+  //  
+  //  fprintf(screen, "Iteration number : %d \n Particle %d position: (%lf,%lf,%lf) \n Subforce 1: (%8.4E,%8.4E,%8.4E), Subforce 2: (%8.4E,%8.4E,%8.4E), Subforce 3: (%8.4E,%8.4E,%8.4E), Subforce 4: (%8.4E,%8.4E,%8.4E) \n Totalforce: (%8.4E,%8.4E,%8.4E) \n", countiter, i, x[i][0],x[i][1],x[i][2],subforce_1[i][0],subforce_1[i][1],subforce_1[i][2],subforce_2[i][0],subforce_2[i][1],subforce_2[i][2],subforce_3[i][0],subforce_3[i][1],subforce_3[i][2],subforce_4[i][0],subforce_4[i][1],subforce_4[i][2],totalforce[i][0],totalforce[i][1],totalforce[i][2]);
+  //  countiter += 1;
+	//}
 	if (vflag_fdotr) virial_fdotr_compute();
 }
 
