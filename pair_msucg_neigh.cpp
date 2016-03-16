@@ -241,7 +241,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       nooc_probability[i] = 1.0;
       nooc_probability_partial[i] = 0.0;
     }
-    // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d with sigma cutoff : %g \n", i, inumber_density, nooc_probability[i], cv_thresholds[itype], itype, sigma_cutoff);
+    printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d with sigma cutoff : %g \n", i, inumber_density, nooc_probability[i], cv_thresholds[itype_actual], itype, threshold_radii[itype_actual]);
   }
   // Communicate state probabilities forward.
   comm->forward_comm_pair(this);
@@ -273,9 +273,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       // Calculate one-body-state potential forces.
       if (false) {
         if (alpha == itype) {
-          nooc_probability_force[i] -= 0.0; // replace 0.0 with one_body_potentials[1];
-        } else if (alpha == itype + n_states_per_type[itype_actual] - 1) {
-          nooc_probability_force[i] += 0.0; // replace 0.0 with one_body_potentials[2];
+          nooc_probability_force[i] -= 0.0; // replace 0.0 with chemical_potentials[alpha];
         }
       }
     }
@@ -298,10 +296,10 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
         r2inv = 1.0 / rsq;
         r6inv = r2inv * r2inv * r2inv;
         // Loop over all combinations of states for these particles.
-        for (alpha = itype_actual; alpha < itype + n_states_per_type[itype_actual]; alpha++) {
-          if (alpha == itype_actual) {
+        for (alpha = itype; alpha < itype + n_states_per_type[itype_actual]; alpha++) {
+          if (alpha == itype) {
             alphaprob = nooc_probability[i];
-          } else if (alpha == itype_actual + n_states_per_type[itype_actual] - 1) {
+          } else if (alpha == itype + n_states_per_type[itype_actual] - 1) {
             alphaprob = (1 - nooc_probability[i]);
           }
           for (beta = jtype; beta < jtype + n_states_per_type[jtype_actual]; beta++) {
@@ -327,10 +325,12 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             // Scale the usual pair force by current state weights & accumulate.
             energy_lj += evdwl * alphaprob * betaprob;
             // Apply the state-specific pair energy as a force on state distribution.
-            if (alpha == itype_actual) {
-              nooc_probability_force[i] -= 1.0 * betaprob * evdwl;
-            } else if (alpha == itype_actual + n_states_per_type[itype_actual] - 1) {
-              nooc_probability_force[i] += 1.0 * betaprob * evdwl;
+            if (n_states_per_type[itype_actual] > 1) {
+              if (alpha == itype) {
+                nooc_probability_force[i] -= betaprob * evdwl;
+              } else if (alpha == itype + n_states_per_type[itype_actual] - 1) {
+                nooc_probability_force[i] += betaprob * evdwl;
+              }
             }
           }
         }
@@ -352,30 +352,32 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     jlist = firstneigh[i];
     jnum = numneigh[i];
 
-    // Convert force against the state to force against the CV
-    // by using the partial of state with respect to CV.
-    cv_force = nooc_probability_force[i] * nooc_probability_partial[i];
-
-    // Apply the force against the CV, in this case density.
-    for (jj = 0; jj < jnum; jj++) {
-      j = jlist[jj];
-      delx = xtmp - x[j][0];
-      dely = ytmp - x[j][1];
-      delz = ztmp - x[j][2];
-      rsq = delx * delx + dely * dely + delz * delz;
-      jtype = type[j];
-
-      // Distribute the force down to every pair of particles
-      // contributing to the density.
-      if (rsq < cutsq[itype][jtype]) {
-        distance = sqrt(rsq);
-        fpair = cv_force * compute_proximity_function_der(itype_actual, distance) / distance;
-        f[i][0] += fpair * delx;
-        f[i][1] += fpair * dely;
-        f[i][2] += fpair * delz;
-        f[j][0] -= fpair * delx;
-        f[j][1] -= fpair * dely;
-        f[j][2] -= fpair * delz;
+    if (n_states_per_type[itype_actual] > 1) {
+      // Convert force against the state to force against the CV
+      // by using the partial of state with respect to CV.
+      cv_force = nooc_probability_force[i] * nooc_probability_partial[i];
+  
+      // Apply the force against the CV, in this case density.
+      for (jj = 0; jj < jnum; jj++) {
+        j = jlist[jj];
+        delx = xtmp - x[j][0];
+        dely = ytmp - x[j][1];
+        delz = ztmp - x[j][2];
+        rsq = delx * delx + dely * dely + delz * delz;
+        jtype = type[j];
+  
+        // Distribute the force down to every pair of particles
+        // contributing to the density.
+        if (rsq < cutsq[itype][jtype]) {
+          distance = sqrt(rsq);
+          fpair = cv_force * compute_proximity_function_der(itype_actual, distance) / distance;
+          f[i][0] += fpair * delx;
+          f[i][1] += fpair * dely;
+          f[i][2] += fpair * delz;
+          f[j][0] -= fpair * delx;
+          f[j][1] -= fpair * dely;
+          f[j][2] -= fpair * delz;
+        }
       }
     }
   }
@@ -673,7 +675,6 @@ void PairMSUCG_NEIGH::allocate()
   memory->create(offset,n+1,n+1,"pair:offset");
 
   memory->create(type_linked, n+1, "pair:type_linked"); /*---YP--- Allocate coeff link array */
-  memory->create(cv_thresholds, n+1, "pair:cv_thresholds"); /*---YP--- Allocate cv thresholds for calculating state probabilities */
 }
 
 /* ----------------------------------------------------------------------
@@ -682,14 +683,12 @@ void PairMSUCG_NEIGH::allocate()
 
 void PairMSUCG_NEIGH::settings(int narg, char **arg)
 {
-  if (narg != 3) error->all(FLERR,"Illegal pair_style command");
+  if (narg != 2) error->all(FLERR,"Illegal pair_style command");
 
   cut_global = force->numeric(FLERR,arg[0]);
-  sigma_cutoff =  atof(arg[1]);
-  p_constant = atof(arg[2]);
 
   // Read in a state definition file
-  // read_state_settings(arg[1]);
+  read_state_settings(arg[1]);
 
   // reset cutoffs that have been explicitly set
 
@@ -710,7 +709,7 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
   FILE* fp = fopen(file, "r");
   if (fp == NULL) {
     char str[128];
-    sprintf(str,"Cannot open file %s", file);
+    sprintf(str, "Cannot open file %s", file);
     error->one(FLERR, str);
   }
 
@@ -727,11 +726,11 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
   memory->create(cv_thresholds, n_actual_types + 1, "pair:n_states_per_type");
   memory->create(threshold_radii, n_actual_types + 1, "pair:n_states_per_type");
   
-  for (int i; i <= n_total_states; i++) {
+  for (int i = 0; i <= n_total_states; i++) {
     chemical_potentials[i] = 0.0;
     actual_types_from_state[i] = 0;
   }
-  for (int i; i <= n_actual_types; i++) {
+  for (int i = 0; i <= n_actual_types; i++) {
     cv_thresholds[i] = 0.0;
     threshold_radii[i] = 0.0;
   }
@@ -759,8 +758,10 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
       // Read state chemical potentials.
       eof = fgets(line, MAXLINE, fp);
       if (eof == NULL) error->one(FLERR,"Unexpected end of MSUCG state settings file");
-      for (int j = 0; j < n_states_per_type[i]; j++) {
-        sscanf(line, "%lg", &chemical_potentials[i + j]);
+      char *p = strtok(line, " ");
+      for (int j = 0; j < n_states_per_type[i] - 1; j++) {
+        sscanf(p, "%lg", &chemical_potentials[i + j]);
+        p = strtok(NULL, " ");
       }
     }
 
@@ -806,11 +807,6 @@ void PairMSUCG_NEIGH::coeff(int narg, char **arg)
       setflag[i][j] = 1;
       count++;
     }
-  }
-
-  // Dummy for reading in type state thresholds.
-  for (int i = 1; i <= atom->ntypes; i++) {
-    cv_thresholds[i] = p_constant;
   }
 
   if (count == 0) error->all(FLERR,"Incorrect args for pair coefficients");

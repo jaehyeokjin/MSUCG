@@ -51,8 +51,6 @@ class PairMSUCG_NEIGH : public Pair {
 
  protected:
   double cut_global;
-  double sigma_cutoff;
-  double p_constant;
   double **cut;
   double **epsilon,**sigma;
   double **lj1,**lj2,**lj3,**lj4,**offset;
