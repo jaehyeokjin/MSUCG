@@ -68,8 +68,10 @@ class PairMSUCG_NEIGH : public Pair {
   int countiter;
   int countneigh;
 
+  int use_state_entropy;
   int n_total_states;
   int n_actual_types;
+  int max_states_per_type;
   int state_params_allocated;
   int *actual_types_from_state;
   int *n_states_per_type;
@@ -83,7 +85,7 @@ class PairMSUCG_NEIGH : public Pair {
   void threshold_prob_and_partial_from_cv(int, double, double&, double&);
   double *nooc_probability, *nooc_probability_partial, *nooc_probability_force;
 
-  double nmax;
+  int nmax;
 
   int pack_reverse_comm(int, int, double *);
   void unpack_reverse_comm(int, int *, double *);

@@ -36,6 +36,8 @@
 #include "modify.h"
 #include "fix.h"
 
+#include <algorithm>
+
 using namespace LAMMPS_NS;
 using namespace MathConst;
 
@@ -55,6 +57,7 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   nooc_probability_partial = NULL;
   nooc_probability_force = NULL;
   state_params_allocated = 0;
+  use_state_entropy = 0;
 
   comm_reverse = 3;
   comm_forward = 3;
@@ -205,9 +208,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
   }
 
   for(i = 0; i < nall; i++) {
-      nooc_probability[i] = 0.0;
-      nooc_probability_partial[i] = 0.0;
-      nooc_probability_force[i] = 0.0;
+    nooc_probability[i] = 0.0;
+    nooc_probability_partial[i] = 0.0;
+    nooc_probability_force[i] = 0.0;
  	}
 
   // First loop: calculate the state probabilities.
@@ -267,19 +270,22 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     jnum = numneigh[i];
 
     // Compute single-body forces conjugate to state change.
-    for (alpha = itype; alpha < itype + n_states_per_type[itype_actual]; alpha++) {
-      // Calculate one-body-state entropic forces.
-      if (false) {
-        if (alpha == itype) {
-          nooc_probability_force[i] -= -kT * log(nooc_probability[i]);
-        } else if (alpha == itype + n_states_per_type[itype_actual] - 1) {
-          nooc_probability_force[i] += -kT * log(1 - nooc_probability[i]);
+    // Apply to each of the state probabilities except the last,
+    // which is always kept implicit.
+    if (n_states_per_type[itype_actual] > 1) {
+      double curr_prob_accounted = 0.0;
+      for (alpha = itype; alpha < itype + n_states_per_type[itype_actual] - 1; alpha++) {
+        // Calculate one-body-state entropic forces.
+        if (use_state_entropy) {
+          nooc_probability_force[i] -= kT * log(nooc_probability[i]);
         }
+        // Calculate one-body-state potential forces.
+        nooc_probability_force[i] -= chemical_potentials[alpha];
+        curr_prob_accounted += nooc_probability[i];
       }
-      // Calculate one-body-state potential forces.
-      if (false) {
-        if (alpha == itype) {
-          nooc_probability_force[i] -= 0.0; // replace 0.0 with chemical_potentials[alpha];
+      if (use_state_entropy) {
+        for (alpha = itype; alpha < itype + n_states_per_type[itype_actual] - 1; alpha++) {
+          nooc_probability_force[i] += kT * log(1 - curr_prob_accounted);
         }
       }
     }
@@ -745,12 +751,14 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
   // (if more than one) the density threshold, the threshold radius for
   // the density, and the one-body chemical potential for the state.
   int curr_state = 1;
+  max_states_per_type = 1;
   for (int i = 1; i <= n_actual_types; i++) {
     // Read the number of states and way that they are assigned.
     eof = fgets(line, MAXLINE, fp);
     if (eof == NULL) error->one(FLERR,"Unexpected end of MSUCG state settings file");
     sscanf(line, "%d %s", &n_states_per_type[i], state_type);
-    
+    max_states_per_type = std::max(max_states_per_type, n_states_per_type[i]);
+
     // If this type has more than one state, read further state parameters.
     if (n_states_per_type[i] > 1) {
       // Read state probability assignment parameters.
