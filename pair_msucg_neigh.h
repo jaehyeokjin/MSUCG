@@ -63,15 +63,14 @@ class PairMSUCG_NEIGH : public Pair {
   //  In-house codes starts from here
 
   double T, kT;     //  target temperature
-  int *type_linked; //  Add one more parameters for each type
-                    //  to store the linked types (that represent
-		                //  other states for the same particle)
+
   /* Force check parameter */
   int countiter;
   int countneigh;
 
   int n_total_states;
   int n_actual_types;
+  int state_params_allocated;
   int *actual_types_from_state;
   int *n_states_per_type;
   double *cv_thresholds;

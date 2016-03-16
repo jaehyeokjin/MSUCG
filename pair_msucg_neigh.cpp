@@ -54,6 +54,7 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   nooc_probability = NULL;
   nooc_probability_partial = NULL;
   nooc_probability_force = NULL;
+  state_params_allocated = 0;
 
   comm_reverse = 3;
   comm_forward = 3;
@@ -75,8 +76,13 @@ PairMSUCG_NEIGH::~PairMSUCG_NEIGH()
     memory->destroy(lj3);
     memory->destroy(lj4);
     memory->destroy(offset);
-
-    memory->destroy(type_linked); /*---YP--- Destroy coeff link array */
+  }
+  if (state_params_allocated) {
+    memory->destroy(cv_thresholds);
+    memory->destroy(threshold_radii);
+    memory->destroy(chemical_potentials);
+    memory->destroy(n_states_per_type);
+    memory->destroy(actual_types_from_state);
   }
 }
 
@@ -673,8 +679,6 @@ void PairMSUCG_NEIGH::allocate()
   memory->create(lj3,n+1,n+1,"pair:lj3");
   memory->create(lj4,n+1,n+1,"pair:lj4");
   memory->create(offset,n+1,n+1,"pair:offset");
-
-  memory->create(type_linked, n+1, "pair:type_linked"); /*---YP--- Allocate coeff link array */
 }
 
 /* ----------------------------------------------------------------------
@@ -721,11 +725,13 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
   // Allocate space for storing state settings based on the number
   // of actual types.
   memory->create(n_states_per_type, n_actual_types + 1, "pair:n_states_per_type");
-  memory->create(chemical_potentials, n_total_states + 1, "pair:n_states_per_type");
   memory->create(actual_types_from_state, n_total_states + 1, "pair:n_states_per_type");
+  memory->create(chemical_potentials, n_total_states + 1, "pair:n_states_per_type");
   memory->create(cv_thresholds, n_actual_types + 1, "pair:n_states_per_type");
   memory->create(threshold_radii, n_actual_types + 1, "pair:n_states_per_type");
   
+  state_params_allocated = 1;
+
   for (int i = 0; i <= n_total_states; i++) {
     chemical_potentials[i] = 0.0;
     actual_types_from_state[i] = 0;
@@ -793,10 +799,6 @@ void PairMSUCG_NEIGH::coeff(int narg, char **arg)
   double sigma_one = force->numeric(FLERR,arg[3]);
 
   double cut_one = cut_global;
-
-  // ---YP--- Change the original definition for coefficient 5
-  // --- if (narg == 5) cut_one = force->numeric(FLERR,arg[4]);
-  if(narg == 5 && strcmp(arg[0], arg[1])==0) type_linked[atoi(arg[0])] = atoi(arg[4]); /*--- Add Linking list informatin here */
 
   int count = 0;
   for (int i = ilo; i <= ihi; i++) {
