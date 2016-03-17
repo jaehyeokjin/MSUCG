@@ -84,7 +84,7 @@ PairMSUCG_NEIGH::~PairMSUCG_NEIGH()
 void PairMSUCG_NEIGH::threshold_prob_and_partial_from_cv(int type, double cv, double &prob, double &partial) {
   double tanh_factor = tanh((cv - cv_thresholds[type]) / (0.1 * cv_thresholds[type]));
   prob = 0.5 + 0.5 * tanh_factor;
-  partial = 0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * cv_thresholds[type]);
+  partial = 0.5 * (1.0 - tanh_factor * tanh_factor);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -152,8 +152,7 @@ double compute_proximity_function(double distance, double distance_threshold) {
 
 double compute_proximity_function_der(double distance, double distance_threshold) {
   double tanh_factor = tanh((distance - distance_threshold) / (0.1 * distance_threshold));
-  return 0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * distance_threshold);
-  // Also changed the sign - to + because it will be considered in the nooc_probability_force
+  return -0.5 * (1.0 - tanh_factor * tanh_factor);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -223,7 +222,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       rsq = delx * delx + dely * dely + delz * delz;
       jtype = type[j];
 
-      if (rsq < 0.25 * cutsq[itype][jtype]) {
+      if (rsq < cutsq[itype][jtype]) {
         distance = sqrt(rsq);
         inumber_density += compute_proximity_function(distance, sigma_cutoff);
       }
@@ -231,9 +230,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 
     // Keep track of the probability and its partial derivative.
     threshold_prob_and_partial_from_cv(itype, inumber_density, nooc_probability[i], nooc_probability_partial[i]);
-    // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d with sigma cutoff : %g \n", i, inumber_density, nooc_probability[i], cv_thresholds[itype], itype, sigma_cutoff);
+    // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, inumber_density, nooc_probability[i], cv_thresholds[itype], itype);
   }
-  // Communicate state probabilities forward.
+  // Communicate local state probabilities and partials forward.
   comm->forward_comm_pair(this);
 
   // Second loop: calculate all forces that do not depend on 
@@ -253,35 +252,33 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       // Calculate one-body-state entropic forces.
       if (false) {
         if (alpha == itype) {
-          nooc_probability_force[i] -= -kT * log(nooc_probability[i]);
+          nooc_probability_force[i] += kT * log(nooc_probability[i]);
         } else if (alpha == itype + n_states - 1) {
-          nooc_probability_force[i] += -kT * log(1 - nooc_probability[i]);
+          nooc_probability_force[i] -= kT * log(1 - nooc_probability[i]);
         }
       }
       // Calculate one-body-state potential forces.
       if (false) {
         if (alpha == itype) {
-          nooc_probability_force[i] -= 0.0; // replace 0.0 with one_body_potentials[1];
+          nooc_probability_force[i] += 0.0; // replace 0.0 with one_body_potentials[1];
         } else if (alpha == itype + n_states - 1) {
-          nooc_probability_force[i] += 0.0; // replace 0.0 with one_body_potentials[2];
+          nooc_probability_force[i] -= 0.0; // replace 0.0 with one_body_potentials[2];
         }
       }
     }
 
     // Compute two-body forces at fixed state and effects of the
     // two body potential on state change.
+    pair_force = 0.0;
     for (jj = 0; jj < jnum; jj++) {
-      energy_lj = 0.0;
-      pair_force = 0.0;
       j = jlist[jj];
-      factor_lj = special_lj[sbmask(j)];
       delx = xtmp - x[j][0];
       dely = ytmp - x[j][1];
       delz = ztmp - x[j][2];
       rsq = delx * delx + dely * dely + delz * delz;
       jtype = type[j];
 
-      if (rsq < 0.25 * cutsq[itype][jtype]) {
+      if (rsq < cutsq[itype][jtype]) {
         r2inv = 1.0 / rsq;
         r6inv = r2inv * r2inv * r2inv;
         // Loop over all combinations of states for these particles.
@@ -297,7 +294,6 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             } else if (beta == jtype + n_states - 1) {
               betaprob = (1 - nooc_probability[j]);
             }
-            // fprintf(screen, "alpha %d (%d): %g beta %d (%d): %g \n", alpha, i,alphaprob, beta, j,betaprob);
             // Calculate the usual force between the particles.
             forcelj = r6inv * (lj1[alpha][beta] * r6inv - lj2[alpha][beta]);
             // Scale the usual pair force by current state weights & accumulate.
@@ -315,19 +311,19 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             energy_lj += evdwl * alphaprob * betaprob;
             // Apply the state-specific pair energy as a force on state distribution.
             if (alpha == itype) {
-              nooc_probability_force[i] -= 1.0 * betaprob * evdwl;
+              nooc_probability_force[i] -= betaprob * evdwl;
             } else if (alpha == itype + n_states - 1) {
-              nooc_probability_force[i] += 1.0 * betaprob * evdwl;
+              nooc_probability_force[i] += betaprob * evdwl;
             }
           }
         }
-        if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz); // ev_tally has to be inside of the j loop? 
       }
     }
+    if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
   }
   // Communicate local state probability forces forward.
   comm->forward_comm_pair(this);
-  
+
   // Third loop: calculate forces from probability derivatives.
   for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
@@ -355,7 +351,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       // contributing to the density.
       if (rsq < cutsq[itype][jtype]) {
         distance = sqrt(rsq);
-        fpair = cv_force * compute_proximity_function_der(distance, sigma_cutoff) / distance;
+        fpair = cv_force * compute_proximity_function_der(itype, distance) / distance;
         f[i][0] += fpair * delx;
         f[i][1] += fpair * dely;
         f[i][2] += fpair * delz;
@@ -365,11 +361,6 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       }
     }
   }
-
-  //for (ii = 0; ii < inum; ii++) {
-  //  i = ilist[ii];
-  //  fprintf(screen, "Force: (%8.4E, %8.4E, %8.4E) on %d(%8.4E, %8.4E, %8.4E)  \n", f[i][0], f[i][1], f[i][2], i,x[i][0],x[i][1],x[i][2]);
-  //}
 
 	if (vflag_fdotr) virial_fdotr_compute();
 }
