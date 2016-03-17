@@ -84,7 +84,7 @@ PairMSUCG_NEIGH::~PairMSUCG_NEIGH()
 void PairMSUCG_NEIGH::threshold_prob_and_partial_from_cv(int type, double cv, double &prob, double &partial) {
   double tanh_factor = tanh((cv - cv_thresholds[type]) / (0.1 * cv_thresholds[type]));
   prob = 0.5 + 0.5 * tanh_factor;
-  partial = 0.5 * (1.0 - tanh_factor * tanh_factor);
+  partial = 0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * cv_thresholds[type]);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -152,7 +152,7 @@ double compute_proximity_function(double distance, double distance_threshold) {
 
 double compute_proximity_function_der(double distance, double distance_threshold) {
   double tanh_factor = tanh((distance - distance_threshold) / (0.1 * distance_threshold));
-  return -0.5 * (1.0 - tanh_factor * tanh_factor);
+  return -0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * distance_threshold);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -269,9 +269,11 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 
     // Compute two-body forces at fixed state and effects of the
     // two body potential on state change.
-    pair_force = 0.0;
     for (jj = 0; jj < jnum; jj++) {
+      energy_lj = 0.0;
+      pair_force = 0.0;
       j = jlist[jj];
+      factor_lj = special_lj[sbmask(j)];
       delx = xtmp - x[j][0];
       dely = ytmp - x[j][1];
       delz = ztmp - x[j][2];
@@ -317,9 +319,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             }
           }
         }
+        if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
       }
     }
-    if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
   }
   // Communicate local state probability forces forward.
   comm->forward_comm_pair(this);
@@ -351,7 +353,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       // contributing to the density.
       if (rsq < cutsq[itype][jtype]) {
         distance = sqrt(rsq);
-        fpair = cv_force * compute_proximity_function_der(itype, distance) / distance;
+        fpair = cv_force * compute_proximity_function_der(distance, sigma_cutoff) / distance;
         f[i][0] += fpair * delx;
         f[i][1] += fpair * dely;
         f[i][2] += fpair * delz;
