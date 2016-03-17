@@ -152,7 +152,7 @@ double compute_proximity_function(double distance, double distance_threshold) {
 
 double compute_proximity_function_der(double distance, double distance_threshold) {
   double tanh_factor = tanh((distance - distance_threshold) / (0.1 * distance_threshold));
-  return -0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * distance_threshold);
+  return 0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * distance_threshold);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -233,6 +233,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, inumber_density, nooc_probability[i], cv_thresholds[itype], itype);
   }
   // Communicate local state probabilities and partials forward.
+  comm->reverse_comm_pair(this);
   comm->forward_comm_pair(this);
 
   // Second loop: calculate all forces that do not depend on 
