@@ -116,7 +116,8 @@ void PairMSUCG_NEIGH::unpack_reverse_comm(int n, int *list, double *buf)
   }
 }
 
-int PairMSUCG_NEIGH::pack_forward_comm(int n, int *list, double *buf)
+int PairMSUCG_NEIGH::pack_forward_comm(int n, int *list, double *buf,
+                                int pbc_flag, int *pbc)
 {
   int i,j,m;
 
@@ -137,9 +138,9 @@ void PairMSUCG_NEIGH::unpack_forward_comm(int n, int first, double *buf)
   m = 0;
   last = first + n;
   for (i = first; i < last; i++) {
-    nooc_probability[i] += buf[m++];
-    nooc_probability_partial[i] += buf[m++];
-    nooc_probability_force[i] += buf[m++];
+    nooc_probability[i] = buf[m++];
+    nooc_probability_partial[i] = buf[m++];
+    nooc_probability_force[i] = buf[m++];
   }
 }
 
@@ -152,7 +153,7 @@ double compute_proximity_function(double distance, double distance_threshold) {
 
 double compute_proximity_function_der(double distance, double distance_threshold) {
   double tanh_factor = tanh((distance - distance_threshold) / (0.1 * distance_threshold));
-  return 0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * distance_threshold);
+  return -0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * distance_threshold);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -227,13 +228,11 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
         inumber_density += compute_proximity_function(distance, sigma_cutoff);
       }
     }
-
     // Keep track of the probability and its partial derivative.
     threshold_prob_and_partial_from_cv(itype, inumber_density, nooc_probability[i], nooc_probability_partial[i]);
-    // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, inumber_density, nooc_probability[i], cv_thresholds[itype], itype);
+    //if (nooc_probability[i] < 0.0 || nooc_probability[i] > 1.0) printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d\n", i, inumber_density, nooc_probability[i], cv_thresholds[itype], itype);
   }
   // Communicate local state probabilities and partials forward.
-  comm->reverse_comm_pair(this);
   comm->forward_comm_pair(this);
 
   // Second loop: calculate all forces that do not depend on 
