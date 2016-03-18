@@ -84,6 +84,7 @@ class PairMSUCG_NEIGH : public Pair {
 
   void threshold_prob_and_partial_from_cv(int, double, double&, double&);
   double *substate_probability, *substate_probability_partial, *substate_probability_force;
+  double **substate_cv_backforce;
 
   int nmax;
 

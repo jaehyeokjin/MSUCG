@@ -56,6 +56,7 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   substate_probability = NULL;
   substate_probability_partial = NULL;
   substate_probability_force = NULL;
+  substate_cv_backforce = NULL;
   state_params_allocated = 0;
   use_state_entropy = 0;
 
@@ -106,9 +107,9 @@ int PairMSUCG_NEIGH::pack_reverse_comm(int n, int first, double *buf)
   m = 0;
   last = first + n;
   for (i = first; i < last; i++) {
-    buf[m++] = substate_probability[i];
-    buf[m++] = substate_probability_partial[i];
-    buf[m++] = substate_probability_force[i];
+    buf[m++] = substate_cv_backforce[i][0];
+    buf[m++] = substate_cv_backforce[i][1];
+    buf[m++] = substate_cv_backforce[i][2];
   }
   return m;
 }
@@ -120,9 +121,9 @@ void PairMSUCG_NEIGH::unpack_reverse_comm(int n, int *list, double *buf)
   m = 0;
   for (i = 0; i < n; i++) {
     j = list[i];
-    substate_probability[j] += buf[m++];
-    substate_probability_partial[j] += buf[m++];
-    substate_probability_force[j] += buf[m++];
+    substate_cv_backforce[j][0] += buf[m++];
+    substate_cv_backforce[j][1] += buf[m++];
+    substate_cv_backforce[j][2] += buf[m++];
   }
 }
 
@@ -206,12 +207,16 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     memory->grow(substate_probability, nall, "pair/msucg:substate_probability");
     memory->grow(substate_probability_partial, nall, "pair/msucg:substate_probability_partial");
     memory->grow(substate_probability_force, nall, "pair/msucg:substate_probability_force");
+    memory->grow(substate_cv_backforce, nall, 3, "pair/msucg:substate_cv_backforce");
   }
 
   for(i = 0; i < nall; i++) {
     substate_probability[i] = 0.0;
     substate_probability_partial[i] = 0.0;
     substate_probability_force[i] = 0.0;
+    substate_cv_backforce[i][0] = 0.0;
+    substate_cv_backforce[i][1] = 0.0;
+    substate_cv_backforce[i][2] = 0.0;
  	}
 
   // First loop: calculate the state probabilities.
@@ -373,12 +378,11 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       }
     }
   }
-  // Communicate local state probability forces forward.
-  comm->forward_comm_pair(this);
   
-  // Third loop: calculate forces from probability derivatives.
-  // This does not apply the correct forces through ghosts; those
-  // forces must be reverse communicated.
+  // Third loop: calculate forces from probability derivatives 
+  // on local atoms.
+  // Forces from local atom probabilities on ghosts must be 
+  // reverse communicated.
   for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
     xtmp = x[i][0];
@@ -411,16 +415,25 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
           if (rsq < cutsq[itype][jtype]) {
             distance = sqrt(rsq);
             fpair = cv_force * compute_proximity_function_der(itype_actual, distance) / distance;
-            f[i][0] += fpair * delx;
-            f[i][1] += fpair * dely;
-            f[i][2] += fpair * delz;
-            f[j][0] -= fpair * delx;
-            f[j][1] -= fpair * dely;
-            f[j][2] -= fpair * delz;
+            substate_cv_backforce[i][0] += fpair * delx;
+            substate_cv_backforce[i][1] += fpair * dely;
+            substate_cv_backforce[i][2] += fpair * delz;
+            substate_cv_backforce[j][0] -= fpair * delx;
+            substate_cv_backforce[j][1] -= fpair * dely;
+            substate_cv_backforce[j][2] -= fpair * delz;
           }
         }
       }
     }
+  }
+  comm->reverse_comm_pair(this);
+  
+  // Add the CV forces to the other forces.
+  for (ii = 0; ii < inum; ii++) {
+    i = ilist[ii];
+    f[i][0] += substate_cv_backforce[i][0];
+    f[i][1] += substate_cv_backforce[i][1];
+    f[i][2] += substate_cv_backforce[i][2];
   }
 
   //for (ii = 0; ii < inum; ii++) {
