@@ -129,28 +129,32 @@ void PairMSUCG_NEIGH::unpack_reverse_comm(int n, int *list, double *buf)
 
 int PairMSUCG_NEIGH::pack_forward_comm(int n, int *list, double *buf, int pbc_flag, int *pbc)
 {
-  int i,j,m;
+  int i,j,m,jsubstate;
 
   m = 0;
   for (i = 0; i < n; i++) {
     j = list[i];
-    buf[m++] = substate_probability[j];
-    buf[m++] = substate_probability_partial[j];
-    buf[m++] = substate_probability_force[j];
+    for (jsubstate = 0; jsubstate < max_states_per_type - 1; jsubstate++) {
+      buf[m++] = substate_probability[j][jsubstate];
+      buf[m++] = substate_probability_partial[j][jsubstate];
+      buf[m++] = substate_probability_force[j][jsubstate];
+    }
   }
   return m;
 }
 
 void PairMSUCG_NEIGH::unpack_forward_comm(int n, int first, double *buf)
 {
-  int i,m,last;
+  int i,m,last,isubstate;
 
   m = 0;
   last = first + n;
   for (i = first; i < last; i++) {
-    substate_probability[i] = buf[m++];
-    substate_probability_partial[i] = buf[m++];
-    substate_probability_force[i] = buf[m++];
+    for (isubstate = 0; isubstate < max_states_per_type - 1; isubstate++) {
+      substate_probability[i][isubstate] = buf[m++];
+      substate_probability_partial[i][isubstate] = buf[m++];
+      substate_probability_force[i][isubstate] = buf[m++];
+    }
   }
 }
 
@@ -176,7 +180,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
 	double xtmp,ytmp,ztmp,delx,dely,delz,evdwl,fpair;
 	double rsq,r2inv,r6inv,forcelj,factor_lj;
   double distance,inumber_density,cv_force;
-  int isubstate,jsubstate,alpha,beta;
+  int isubstate,jsubstate,ksubstate,alpha,beta;
   double alphaprob,betaprob;
   double i_prob_accounted, j_prob_accounted;
 	/* Additional parameter */
@@ -204,16 +208,18 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
   int nall = nlocal + atom->nghost;
 	if (nall > nmax) {
   	nmax = nall;
-    memory->grow(substate_probability, nall, "pair/msucg:substate_probability");
-    memory->grow(substate_probability_partial, nall, "pair/msucg:substate_probability_partial");
-    memory->grow(substate_probability_force, nall, "pair/msucg:substate_probability_force");
+    memory->grow(substate_probability, nall, max_states_per_type - 1, "pair/msucg:substate_probability");
+    memory->grow(substate_probability_partial, nall, max_states_per_type - 1, "pair/msucg:substate_probability_partial");
+    memory->grow(substate_probability_force, nall, max_states_per_type - 1, "pair/msucg:substate_probability_force");
     memory->grow(substate_cv_backforce, nall, 3, "pair/msucg:substate_cv_backforce");
   }
 
   for(i = 0; i < nall; i++) {
-    substate_probability[i] = 0.0;
-    substate_probability_partial[i] = 0.0;
-    substate_probability_force[i] = 0.0;
+    for (j = 0; j < max_states_per_type - 1; j++) {
+      substate_probability[i][j] = 0.0;
+      substate_probability_partial[i][j] = 0.0;
+      substate_probability_force[i][j] = 0.0;
+    }
     substate_cv_backforce[i][0] = 0.0;
     substate_cv_backforce[i][1] = 0.0;
     substate_cv_backforce[i][2] = 0.0;
@@ -249,11 +255,11 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       }
   
       // Keep track of the probability and its partial derivative.
-      threshold_prob_and_partial_from_cv(itype_actual, inumber_density, substate_probability[i], substate_probability_partial[i]);
+      threshold_prob_and_partial_from_cv(itype_actual, inumber_density, substate_probability[i][0], substate_probability_partial[i][0]);
     } else {
-      // For types without substates, simply assign p = 1
+      // For types without substates, simply assign p0 = 1.
       // (No partial derivatives.)
-      substate_probability[i] = 1.0;
+      substate_probability[i][0] = 1.0;
     }
     // printf("Particle %d has number_density %g and substate_probability %g given substate_threshold of %g for type %d with sigma cutoff : %g \n", i, inumber_density, substate_probability[i], cv_thresholds[itype_actual], itype, threshold_radii[itype_actual]);
   }
@@ -283,17 +289,17 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       for (isubstate = 0; isubstate < n_states_per_type[itype_actual] - 1; isubstate++) {
         // Calculate one-body-state entropic forces.
         if (use_state_entropy) {
-          substate_probability_force[i] -= kT * log(substate_probability[i]);
+          substate_probability_force[i][isubstate] -= kT * log(substate_probability[i][isubstate]);
         }
         // Calculate one-body-state potential forces.
-        substate_probability_force[i] -= chemical_potentials[itype + isubstate];
-        i_prob_accounted += substate_probability[i];
+        substate_probability_force[i][isubstate] -= chemical_potentials[itype + isubstate];
+        i_prob_accounted += substate_probability[i][isubstate];
       }
       // For the last substate, use conservation of probability to write
       // its effect as force mediated through the other probabilities.
       if (use_state_entropy) {
         for (isubstate = 0; isubstate < n_states_per_type[itype_actual] - 1; isubstate++) {
-          substate_probability_force[i] += kT * log(1 - i_prob_accounted);
+          substate_probability_force[i][isubstate] += kT * log(1 - i_prob_accounted);
         }
       }
     }
@@ -322,8 +328,8 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
           alpha = itype + isubstate;
           if (n_states_per_type[itype_actual] > 1) {
             if (isubstate < n_states_per_type[itype_actual] - 1) {
-              alphaprob = substate_probability[i];
-              i_prob_accounted += substate_probability[i];
+              alphaprob = substate_probability[i][isubstate];
+              i_prob_accounted += substate_probability[i][isubstate];
             } else {
               alphaprob = (1 - i_prob_accounted);
             }
@@ -337,8 +343,8 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             beta = jtype + jsubstate;
             if (n_states_per_type[jtype_actual] > 1) {
               if (jsubstate < n_states_per_type[jtype_actual] - 1) {
-                betaprob = substate_probability[j];
-                j_prob_accounted += substate_probability[j];
+                betaprob = substate_probability[j][jsubstate];
+                j_prob_accounted += substate_probability[j][jsubstate];
               } else {
                 betaprob = (1 - j_prob_accounted);
               }
@@ -367,9 +373,11 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             // to the state distribution.
             if (n_states_per_type[itype_actual] > 1) {
               if (isubstate < n_states_per_type[itype_actual] - 1) {
-                substate_probability_force[i] -= betaprob * evdwl;
+                substate_probability_force[i][isubstate] -= betaprob * evdwl;
               } else {
-                substate_probability_force[i] += betaprob * evdwl;
+                for (ksubstate = 0; ksubstate < n_states_per_type[itype_actual] - 1; ksubstate++) {
+                  substate_probability_force[i][ksubstate] += betaprob * evdwl;
+                }
               }
             }
           }
@@ -399,7 +407,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
         
         // Convert force against the state to force against the CV
         // by using the partial of state with respect to CV.
-        cv_force = substate_probability_force[i] * substate_probability_partial[i];
+        cv_force = substate_probability_force[i][isubstate] * substate_probability_partial[i][isubstate];
   
         // Apply the force against the CV, in this case density.
         for (jj = 0; jj < jnum; jj++) {
@@ -793,7 +801,7 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
   // (if more than one) the density threshold, the threshold radius for
   // the density, and the one-body chemical potential for the state.
   int curr_state = 1;
-  max_states_per_type = 1;
+  max_states_per_type = 2;
   for (int i = 1; i <= n_actual_types; i++) {
     // Read the number of states and way that they are assigned.
     eof = fgets(line, MAXLINE, fp);
@@ -827,6 +835,7 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
       curr_state++;
     }
   }
+
   // Close after finishing.
   fclose(fp);
 }
