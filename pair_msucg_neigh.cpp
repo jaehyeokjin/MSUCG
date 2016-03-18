@@ -247,9 +247,8 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       threshold_prob_and_partial_from_cv(itype_actual, inumber_density, nooc_probability[i], nooc_probability_partial[i]);
     } else {
       // For types without substates, simply assign p = 1
-      // with no derivatives.
+      // (No partial derivatives.)
       nooc_probability[i] = 1.0;
-      nooc_probability_partial[i] = 0.0;
     }
     // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d with sigma cutoff : %g \n", i, inumber_density, nooc_probability[i], cv_thresholds[itype_actual], itype, threshold_radii[itype_actual]);
   }
@@ -274,6 +273,8 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     // which is always kept implicit.
     if (n_states_per_type[itype_actual] > 1) {
       i_prob_accounted = 0.0;
+      // For each substate but the last, calculate the derivative
+      // of the free energy with respect to probability.
       for (isubstate = 0; isubstate < n_states_per_type[itype_actual] - 1; isubstate++) {
         // Calculate one-body-state entropic forces.
         if (use_state_entropy) {
@@ -283,6 +284,8 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
         nooc_probability_force[i] -= chemical_potentials[itype + isubstate];
         i_prob_accounted += nooc_probability[i];
       }
+      // For the last substate, use conservation of probability to write
+      // its effect as force mediated through the other probabilities.
       if (use_state_entropy) {
         for (isubstate = 0; isubstate < n_states_per_type[itype_actual] - 1; isubstate++) {
           nooc_probability_force[i] += kT * log(1 - i_prob_accounted);
@@ -309,25 +312,33 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
         r6inv = r2inv * r2inv * r2inv;
         
         // Loop over all possible substates of particle i.
-        i_prob_accounted = 0.0;
+        i_prob_accounted = 0;
         for (isubstate = 0; isubstate < n_states_per_type[itype_actual]; isubstate++) {
           alpha = itype + isubstate;
-          if (isubstate == 0) {
-            alphaprob = nooc_probability[i];
-            i_prob_accounted += nooc_probability[i];
-          } else if (isubstate == n_states_per_type[itype_actual] - 1) {
-            alphaprob = (1 - i_prob_accounted);
+          if (n_states_per_type[itype_actual] > 1) {
+            if (isubstate < n_states_per_type[itype_actual] - 1) {
+              alphaprob = nooc_probability[i];
+              i_prob_accounted += nooc_probability[i];
+            } else {
+              alphaprob = (1 - i_prob_accounted);
+            }
+          } else {
+            alphaprob = 1.0;
           }
           
           // Iterate over all possible substates of particle j.
-          j_prob_accounted = 0.0;
+          j_prob_accounted = 0;
           for (jsubstate = 0; jsubstate < n_states_per_type[jtype_actual]; jsubstate++) {
             beta = jtype + jsubstate;
-            if (jsubstate == 0) {
-              betaprob = nooc_probability[j];
-              j_prob_accounted += nooc_probability[j];
-            } else if (jsubstate == n_states_per_type[jtype_actual] - 1) {
-              betaprob = (1 - j_prob_accounted);
+            if (n_states_per_type[jtype_actual] > 1) {
+              if (jsubstate < n_states_per_type[jtype_actual] - 1) {
+                betaprob = nooc_probability[j];
+                j_prob_accounted += nooc_probability[j];
+              } else {
+                betaprob = (1 - j_prob_accounted);
+              }
+            } else {
+              betaprob = 1.0;
             }
             // fprintf(screen, "alpha %d (%d): %g beta %d (%d): %g \n", alpha, i,alphaprob, beta, j,betaprob);
             
@@ -350,9 +361,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             // Apply the state-specific pair energy as a conjugate
             // to the state distribution.
             if (n_states_per_type[itype_actual] > 1) {
-              if (isubstate == 0) {
+              if (isubstate < n_states_per_type[itype_actual] - 1) {
                 nooc_probability_force[i] -= betaprob * evdwl;
-              } else if (isubstate == n_states_per_type[itype_actual] - 1) {
+              } else {
                 nooc_probability_force[i] += betaprob * evdwl;
               }
             }
