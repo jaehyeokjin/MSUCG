@@ -68,16 +68,16 @@ class PairMSUCG_NEIGH : public Pair {
   int countiter;
   int countneigh;
 
-  int use_state_entropy;
   int n_total_states;
   int n_actual_types;
   int max_states_per_type;
   int state_params_allocated;
-  int *actual_types_from_state;
   int *n_states_per_type;
+  int *actual_types_from_state;
+  int *use_state_entropy;
+  double *chemical_potentials;
   double *cv_thresholds;
   double *threshold_radii;
-  double *chemical_potentials;
   
   double compute_proximity_function(int, double);
   double compute_proximity_function_der(int, double);

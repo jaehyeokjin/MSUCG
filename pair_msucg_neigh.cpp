@@ -58,7 +58,6 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   substate_probability_force = NULL;
   substate_cv_backforce = NULL;
   state_params_allocated = 0;
-  use_state_entropy = 0;
 
   comm_reverse = 3;
   comm_forward = 3;
@@ -82,11 +81,12 @@ PairMSUCG_NEIGH::~PairMSUCG_NEIGH()
     memory->destroy(offset);
   }
   if (state_params_allocated) {
-    memory->destroy(cv_thresholds);
-    memory->destroy(threshold_radii);
-    memory->destroy(chemical_potentials);
     memory->destroy(n_states_per_type);
     memory->destroy(actual_types_from_state);
+    memory->destroy(use_state_entropy);
+    memory->destroy(chemical_potentials);
+    memory->destroy(cv_thresholds);
+    memory->destroy(threshold_radii);
   }
 }
 
@@ -288,7 +288,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       // of the free energy with respect to probability.
       for (isubstate = 0; isubstate < n_states_per_type[itype_actual] - 1; isubstate++) {
         // Calculate one-body-state entropic forces.
-        if (use_state_entropy) {
+        if (use_state_entropy[itype_actual]) {
           substate_probability_force[i][isubstate] -= kT * log(substate_probability[i][isubstate]);
         }
         // Calculate one-body-state potential forces.
@@ -297,7 +297,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       }
       // For the last substate, use conservation of probability to write
       // its effect as force mediated through the other probabilities.
-      if (use_state_entropy) {
+      if (use_state_entropy[itype_actual]) {
         for (isubstate = 0; isubstate < n_states_per_type[itype_actual] - 1; isubstate++) {
           substate_probability_force[i][isubstate] += kT * log(1 - i_prob_accounted);
         }
@@ -764,6 +764,7 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
   char *eof;
   char line[MAXLINE];
   char state_type[MAXLINE];
+  char entropy_spec[MAXLINE];
 
   // Open the state settings file.
   FILE* fp = fopen(file, "r");
@@ -782,6 +783,7 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
   // of actual types.
   memory->create(n_states_per_type, n_actual_types + 1, "pair:n_states_per_type");
   memory->create(actual_types_from_state, n_total_states + 1, "pair:n_states_per_type");
+  memory->create(use_state_entropy, n_actual_types + 1, "pair:n_states_per_type");
   memory->create(chemical_potentials, n_total_states + 1, "pair:n_states_per_type");
   memory->create(cv_thresholds, n_actual_types + 1, "pair:n_states_per_type");
   memory->create(threshold_radii, n_actual_types + 1, "pair:n_states_per_type");
@@ -793,6 +795,8 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
     actual_types_from_state[i] = 0;
   }
   for (int i = 0; i <= n_actual_types; i++) {
+    n_states_per_type[i] = 0;
+    use_state_entropy[i] = 0;
     cv_thresholds[i] = 0.0;
     threshold_radii[i] = 0.0;
   }
@@ -806,8 +810,13 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
     // Read the number of states and way that they are assigned.
     eof = fgets(line, MAXLINE, fp);
     if (eof == NULL) error->one(FLERR,"Unexpected end of MSUCG state settings file");
-    sscanf(line, "%d %s", &n_states_per_type[i], state_type);
+    sscanf(line, "%d %s %s", &n_states_per_type[i], state_type, entropy_spec);
     max_states_per_type = std::max(max_states_per_type, n_states_per_type[i]);
+    if (strcmp(state_type, "use_entropy") == 0) {
+      use_state_entropy[i] = 1;
+    } else if (strcmp(state_type, "no_entropy") == 0) {
+      use_state_entropy[i] = 0;
+    }
 
     // If this type has more than one state, read further state parameters.
     if (n_states_per_type[i] > 1) {
