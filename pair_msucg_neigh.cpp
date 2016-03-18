@@ -304,7 +304,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       jtype = type[j];
       jtype_actual = actual_types_from_state[jtype];
 
-      if (rsq < 0.25 * cutsq[itype][jtype]) {
+      if (rsq < cutsq[itype][jtype]) {
         r2inv = 1.0 / rsq;
         r6inv = r2inv * r2inv * r2inv;
         
