@@ -126,7 +126,7 @@ void PairMSUCG_NEIGH::unpack_reverse_comm(int n, int *list, double *buf)
   }
 }
 
-int PairMSUCG_NEIGH::pack_forward_comm(int n, int *list, double *buf)
+int PairMSUCG_NEIGH::pack_forward_comm(int n, int *list, double *buf, int pbc_flag, int *pbc)
 {
   int i,j,m;
 
@@ -250,11 +250,10 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       nooc_probability[i] = 1.0;
       nooc_probability_partial[i] = 0.0;
     }
-    printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d with sigma cutoff : %g \n", i, inumber_density, nooc_probability[i], cv_thresholds[itype_actual], itype, threshold_radii[itype_actual]);
+    // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d with sigma cutoff : %g \n", i, inumber_density, nooc_probability[i], cv_thresholds[itype_actual], itype, threshold_radii[itype_actual]);
   }
   // Communicate state probabilities forward.
   comm->forward_comm_pair(this);
-  comm->reverse_comm_pair(this);
 
   // Second loop: calculate all forces that do not depend on 
   // probability derivatives and against the state distribution 
