@@ -835,6 +835,7 @@ void PairMSUCG_NEIGH::read_state_settings(const char *file) {
       curr_state++;
     }
   }
+  comm_forward = 3 * (max_states_per_type - 1);
 
   // Close after finishing.
   fclose(fp);
