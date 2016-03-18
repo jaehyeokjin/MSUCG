@@ -53,9 +53,9 @@ PairMSUCG_NEIGH::PairMSUCG_NEIGH(LAMMPS *lmp) : Pair(lmp)
   countneigh = 0;
   nmax = 0;
 
-  nooc_probability = NULL;
-  nooc_probability_partial = NULL;
-  nooc_probability_force = NULL;
+  substate_probability = NULL;
+  substate_probability_partial = NULL;
+  substate_probability_force = NULL;
   state_params_allocated = 0;
   use_state_entropy = 0;
 
@@ -106,9 +106,9 @@ int PairMSUCG_NEIGH::pack_reverse_comm(int n, int first, double *buf)
   m = 0;
   last = first + n;
   for (i = first; i < last; i++) {
-    buf[m++] = nooc_probability[i];
-    buf[m++] = nooc_probability_partial[i];
-    buf[m++] = nooc_probability_force[i];
+    buf[m++] = substate_probability[i];
+    buf[m++] = substate_probability_partial[i];
+    buf[m++] = substate_probability_force[i];
   }
   return m;
 }
@@ -120,9 +120,9 @@ void PairMSUCG_NEIGH::unpack_reverse_comm(int n, int *list, double *buf)
   m = 0;
   for (i = 0; i < n; i++) {
     j = list[i];
-    nooc_probability[j] += buf[m++];
-    nooc_probability_partial[j] += buf[m++];
-    nooc_probability_force[j] += buf[m++];
+    substate_probability[j] += buf[m++];
+    substate_probability_partial[j] += buf[m++];
+    substate_probability_force[j] += buf[m++];
   }
 }
 
@@ -133,9 +133,9 @@ int PairMSUCG_NEIGH::pack_forward_comm(int n, int *list, double *buf, int pbc_fl
   m = 0;
   for (i = 0; i < n; i++) {
     j = list[i];
-    buf[m++] = nooc_probability[j];
-    buf[m++] = nooc_probability_partial[j];
-    buf[m++] = nooc_probability_force[j];
+    buf[m++] = substate_probability[j];
+    buf[m++] = substate_probability_partial[j];
+    buf[m++] = substate_probability_force[j];
   }
   return m;
 }
@@ -147,9 +147,9 @@ void PairMSUCG_NEIGH::unpack_forward_comm(int n, int first, double *buf)
   m = 0;
   last = first + n;
   for (i = first; i < last; i++) {
-    nooc_probability[i] = buf[m++];
-    nooc_probability_partial[i] = buf[m++];
-    nooc_probability_force[i] = buf[m++];
+    substate_probability[i] = buf[m++];
+    substate_probability_partial[i] = buf[m++];
+    substate_probability_force[i] = buf[m++];
   }
 }
 
@@ -163,7 +163,7 @@ double PairMSUCG_NEIGH::compute_proximity_function(int type, double distance) {
 double PairMSUCG_NEIGH::compute_proximity_function_der(int type, double distance) {
   double tanh_factor = tanh((distance - threshold_radii[type]) / (0.1 * threshold_radii[type]));
   return 0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * threshold_radii[type]);
-  // Also changed the sign - to + because it will be considered in the nooc_probability_force
+  // Also changed the sign - to + because it will be considered in the substate_probability_force
 }
 
 /* ---------------------------------------------------------------------- */
@@ -203,15 +203,15 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
   int nall = nlocal + atom->nghost;
 	if (nall > nmax) {
   	nmax = nall;
-    memory->grow(nooc_probability, nall, "pair/msucg:nooc_probability");
-    memory->grow(nooc_probability_partial, nall, "pair/msucg:nooc_probability_partial");
-    memory->grow(nooc_probability_force, nall, "pair/msucg:nooc_probability_force");
+    memory->grow(substate_probability, nall, "pair/msucg:substate_probability");
+    memory->grow(substate_probability_partial, nall, "pair/msucg:substate_probability_partial");
+    memory->grow(substate_probability_force, nall, "pair/msucg:substate_probability_force");
   }
 
   for(i = 0; i < nall; i++) {
-    nooc_probability[i] = 0.0;
-    nooc_probability_partial[i] = 0.0;
-    nooc_probability_force[i] = 0.0;
+    substate_probability[i] = 0.0;
+    substate_probability_partial[i] = 0.0;
+    substate_probability_force[i] = 0.0;
  	}
 
   // First loop: calculate the state probabilities.
@@ -244,13 +244,13 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       }
   
       // Keep track of the probability and its partial derivative.
-      threshold_prob_and_partial_from_cv(itype_actual, inumber_density, nooc_probability[i], nooc_probability_partial[i]);
+      threshold_prob_and_partial_from_cv(itype_actual, inumber_density, substate_probability[i], substate_probability_partial[i]);
     } else {
       // For types without substates, simply assign p = 1
       // (No partial derivatives.)
-      nooc_probability[i] = 1.0;
+      substate_probability[i] = 1.0;
     }
-    // printf("Particle %d has number_density %g and nooc_probability %g given nooc_threshold of %g for type %d with sigma cutoff : %g \n", i, inumber_density, nooc_probability[i], cv_thresholds[itype_actual], itype, threshold_radii[itype_actual]);
+    // printf("Particle %d has number_density %g and substate_probability %g given substate_threshold of %g for type %d with sigma cutoff : %g \n", i, inumber_density, substate_probability[i], cv_thresholds[itype_actual], itype, threshold_radii[itype_actual]);
   }
   // Communicate state probabilities forward.
   comm->forward_comm_pair(this);
@@ -278,17 +278,17 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       for (isubstate = 0; isubstate < n_states_per_type[itype_actual] - 1; isubstate++) {
         // Calculate one-body-state entropic forces.
         if (use_state_entropy) {
-          nooc_probability_force[i] -= kT * log(nooc_probability[i]);
+          substate_probability_force[i] -= kT * log(substate_probability[i]);
         }
         // Calculate one-body-state potential forces.
-        nooc_probability_force[i] -= chemical_potentials[itype + isubstate];
-        i_prob_accounted += nooc_probability[i];
+        substate_probability_force[i] -= chemical_potentials[itype + isubstate];
+        i_prob_accounted += substate_probability[i];
       }
       // For the last substate, use conservation of probability to write
       // its effect as force mediated through the other probabilities.
       if (use_state_entropy) {
         for (isubstate = 0; isubstate < n_states_per_type[itype_actual] - 1; isubstate++) {
-          nooc_probability_force[i] += kT * log(1 - i_prob_accounted);
+          substate_probability_force[i] += kT * log(1 - i_prob_accounted);
         }
       }
     }
@@ -317,8 +317,8 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
           alpha = itype + isubstate;
           if (n_states_per_type[itype_actual] > 1) {
             if (isubstate < n_states_per_type[itype_actual] - 1) {
-              alphaprob = nooc_probability[i];
-              i_prob_accounted += nooc_probability[i];
+              alphaprob = substate_probability[i];
+              i_prob_accounted += substate_probability[i];
             } else {
               alphaprob = (1 - i_prob_accounted);
             }
@@ -332,8 +332,8 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             beta = jtype + jsubstate;
             if (n_states_per_type[jtype_actual] > 1) {
               if (jsubstate < n_states_per_type[jtype_actual] - 1) {
-                betaprob = nooc_probability[j];
-                j_prob_accounted += nooc_probability[j];
+                betaprob = substate_probability[j];
+                j_prob_accounted += substate_probability[j];
               } else {
                 betaprob = (1 - j_prob_accounted);
               }
@@ -362,9 +362,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             // to the state distribution.
             if (n_states_per_type[itype_actual] > 1) {
               if (isubstate < n_states_per_type[itype_actual] - 1) {
-                nooc_probability_force[i] -= betaprob * evdwl;
+                substate_probability_force[i] -= betaprob * evdwl;
               } else {
-                nooc_probability_force[i] += betaprob * evdwl;
+                substate_probability_force[i] += betaprob * evdwl;
               }
             }
           }
@@ -395,7 +395,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
         
         // Convert force against the state to force against the CV
         // by using the partial of state with respect to CV.
-        cv_force = nooc_probability_force[i] * nooc_probability_partial[i];
+        cv_force = substate_probability_force[i] * substate_probability_partial[i];
   
         // Apply the force against the CV, in this case density.
         for (jj = 0; jj < jnum; jj++) {
