@@ -147,9 +147,9 @@ void PairMSUCG_NEIGH::unpack_forward_comm(int n, int first, double *buf)
   m = 0;
   last = first + n;
   for (i = first; i < last; i++) {
-    nooc_probability[i] += buf[m++];
-    nooc_probability_partial[i] += buf[m++];
-    nooc_probability_force[i] += buf[m++];
+    nooc_probability[i] = buf[m++];
+    nooc_probability_partial[i] = buf[m++];
+    nooc_probability_force[i] = buf[m++];
   }
 }
 
