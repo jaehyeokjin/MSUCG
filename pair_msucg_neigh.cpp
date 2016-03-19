@@ -272,6 +272,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     for (jj = 0; jj < jnum; jj++) {
       energy_lj = 0.0;
       pair_force = 0.0;
+      double prob_product = 0.0;
       j = jlist[jj];
       factor_lj = special_lj[sbmask(j)];
       delx = xtmp - x[j][0];
@@ -300,6 +301,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             forcelj = r6inv * (lj1[alpha][beta] * r6inv - lj2[alpha][beta]);
             // Scale the usual pair force by current state weights & accumulate.
             fpair = factor_lj * forcelj * r2inv * alphaprob * betaprob;
+            prob_product += alphaprob * betaprob;
             // Accumulate the forces.
             f[i][0] += fpair * delx;
             f[i][1] += fpair * dely;
@@ -310,7 +312,8 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             evdwl = r6inv*(lj3[alpha][beta]*r6inv-lj4[alpha][beta]) - offset[alpha][beta];
             evdwl *= factor_lj;
             // Scale the usual pair force by current state weights & accumulate.
-            energy_lj += evdwl * alphaprob * betaprob;
+            if (j < nlocal) energy_lj += evdwl * alphaprob * betaprob * 0.5;
+            else energy_lj += evdwl * alphaprob * betaprob * 1.0;
             // Apply the state-specific pair energy as a force on state distribution.
             if (alpha == itype) {
               nooc_probability_force[i] -= betaprob * evdwl;
@@ -320,12 +323,13 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
           }
         }
         if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
+//        fprintf(screen, "Particle %d and %d sum of probability product: %g \n", i, j, prob_product);
       }
     }
   }
   // Communicate local state probability forces forward.
-  comm->forward_comm_pair(this);
-
+  
+//  comm->forward_comm_pair(this);
   // Third loop: calculate forces from probability derivatives.
   for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
