@@ -74,8 +74,6 @@ PairMSUCG_NEIGH::~PairMSUCG_NEIGH()
     memory->destroy(lj3);
     memory->destroy(lj4);
     memory->destroy(offset);
-
-    memory->destroy(type_linked); /*---YP--- Destroy coeff link array */
   }
 }
 
@@ -246,7 +244,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     itype = type[i];
     jlist = firstneigh[i];
     jnum = numneigh[i];
-
+    
     // Compute single-body forces conjugate to state change.
     for (alpha = itype; alpha < itype + n_states; alpha++) {
       // Calculate one-body-state entropic forces.
@@ -272,9 +270,10 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     for (jj = 0; jj < jnum; jj++) {
       energy_lj = 0.0;
       pair_force = 0.0;
-      double prob_product = 0.0;
       j = jlist[jj];
       factor_lj = special_lj[sbmask(j)];
+      j &= NEIGHMASK;
+
       delx = xtmp - x[j][0];
       dely = ytmp - x[j][1];
       delz = ztmp - x[j][2];
@@ -301,24 +300,31 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             forcelj = r6inv * (lj1[alpha][beta] * r6inv - lj2[alpha][beta]);
             // Scale the usual pair force by current state weights & accumulate.
             fpair = factor_lj * forcelj * r2inv * alphaprob * betaprob;
-            prob_product += alphaprob * betaprob;
             // Accumulate the forces.
             f[i][0] += fpair * delx;
             f[i][1] += fpair * dely;
-            f[i][2] += fpair * delz;
-            // Include in accumulating virial.
-            pair_force += fpair;
+            f[i][2] += fpair * delz;                     
             // Calculate the usual pair energy.
             evdwl = r6inv*(lj3[alpha][beta]*r6inv-lj4[alpha][beta]) - offset[alpha][beta];
             evdwl *= factor_lj;
             // Scale the usual pair force by current state weights & accumulate.
-            if (j < nlocal) energy_lj += evdwl * alphaprob * betaprob * 0.5;
-            else energy_lj += evdwl * alphaprob * betaprob * 1.0;
+            if (j < nlocal){
+              energy_lj += evdwl * alphaprob * betaprob * 0.5;
+              // Include in accumulating virial.
+              pair_force += fpair * 0.5;
+            }
+            else {
+              energy_lj += evdwl * alphaprob * betaprob * 1.0;
+              // Include in accumulating virial.
+              pair_force += fpair;
+            }
             // Apply the state-specific pair energy as a force on state distribution.
             if (alpha == itype) {
-              nooc_probability_force[i] -= betaprob * evdwl;
+              if (j < nlocal) nooc_probability_force[i] -= 0.5 * betaprob * evdwl;
+              else nooc_probability_force[i] -= betaprob * evdwl;
             } else if (alpha == itype + n_states - 1) {
-              nooc_probability_force[i] += betaprob * evdwl;
+              if (j < nlocal) nooc_probability_force[i] += 0.5 * betaprob * evdwl;
+              else nooc_probability_force[i] += betaprob * evdwl;
             }
           }
         }
@@ -328,8 +334,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
     }
   }
   // Communicate local state probability forces forward.
-  
-//  comm->forward_comm_pair(this);
+//  comm->reverse_comm_pair(this);
+  comm->forward_comm_pair(this);
+/*
   // Third loop: calculate forces from probability derivatives.
   for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
@@ -367,7 +374,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       }
     }
   }
-
+*/
 	if (vflag_fdotr) virial_fdotr_compute();
 }
 
@@ -654,9 +661,6 @@ void PairMSUCG_NEIGH::allocate()
   memory->create(lj3,n+1,n+1,"pair:lj3");
   memory->create(lj4,n+1,n+1,"pair:lj4");
   memory->create(offset,n+1,n+1,"pair:offset");
-
-  memory->create(type_linked, n+1, "pair:type_linked"); /*---YP--- Allocate coeff link array */
-
   memory->create(cv_thresholds, n+1, "pair:cv_thresholds"); /*---YP--- Allocate cv thresholds for calculating state probabilities */
 }
 
@@ -688,7 +692,7 @@ void PairMSUCG_NEIGH::settings(int narg, char **arg)
 
 void PairMSUCG_NEIGH::coeff(int narg, char **arg)
 {
-  if (narg < 5 || narg > 6)
+  if (narg < 4 || narg > 5)
     error->all(FLERR,"Incorrect args for pair coefficients");
   if (!allocated) allocate();
 
@@ -700,10 +704,7 @@ void PairMSUCG_NEIGH::coeff(int narg, char **arg)
   double sigma_one = force->numeric(FLERR,arg[3]);
 
   double cut_one = cut_global;
-
-  // ---YP--- Change the original definition for coefficient 5
-  // --- if (narg == 5) cut_one = force->numeric(FLERR,arg[4]);
-  if(narg == 5 && strcmp(arg[0], arg[1])==0) type_linked[atoi(arg[0])] = atoi(arg[4]); /*--- Add Linking list informatin here */
+  if (narg == 5) cut_one = force->numeric(FLERR,arg[4]);
 
   int count = 0;
   for (int i = ilo; i <= ihi; i++) {
