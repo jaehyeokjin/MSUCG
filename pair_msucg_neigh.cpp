@@ -320,11 +320,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             }
             // Apply the state-specific pair energy as a force on state distribution.
             if (alpha == itype) {
-              if (j < nlocal) nooc_probability_force[i] -= 0.5 * betaprob * evdwl;
-              else nooc_probability_force[i] -= betaprob * evdwl;
+              nooc_probability_force[i] -= betaprob * evdwl;
             } else if (alpha == itype + n_states - 1) {
-              if (j < nlocal) nooc_probability_force[i] += 0.5 * betaprob * evdwl;
-              else nooc_probability_force[i] += betaprob * evdwl;
+              nooc_probability_force[i] += betaprob * evdwl;
             }
           }
         }
@@ -336,7 +334,7 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
   // Communicate local state probability forces forward.
 //  comm->reverse_comm_pair(this);
   comm->forward_comm_pair(this);
-/*
+
   // Third loop: calculate forces from probability derivatives.
   for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
@@ -374,7 +372,6 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
       }
     }
   }
-*/
 	if (vflag_fdotr) virial_fdotr_compute();
 }
 
