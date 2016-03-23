@@ -361,14 +361,20 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             f[i][0] += fpair * delx;
             f[i][1] += fpair * dely;
             f[i][2] += fpair * delz;
-            pair_force += fpair;
-            
             // Calculate the usual pair energy.
             evdwl = r6inv*(lj3[alpha][beta]*r6inv-lj4[alpha][beta]) - offset[alpha][beta];
             evdwl *= factor_lj;
             // Scale the usual pair force by current state weights.
-            energy_lj += evdwl * alphaprob * betaprob;
-            
+            if (j < nlocal){
+              energy_lj += evdwl * alphaprob * betaprob * 0.5;
+              // Include in accumulating virial.
+              pair_force += fpair * 0.5;
+            }
+            else {
+              energy_lj += evdwl * alphaprob * betaprob * 1.0;
+              // Include in accumulating virial.
+              pair_force += fpair;
+            }            
             // Apply the state-specific pair energy as a conjugate
             // to the state distribution.
             if (n_states_per_type[itype_actual] > 1) {
