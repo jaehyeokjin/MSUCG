@@ -423,19 +423,23 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
           delz = ztmp - x[j][2];
           rsq = delx * delx + dely * dely + delz * delz;
           jtype = type[j];
+          pair_force = 0.0;
   
           // Distribute the force down to every pair of particles
           // contributing to the density.
           if (rsq < cutsq[itype][jtype]) {
             distance = sqrt(rsq);
             fpair = cv_force * compute_proximity_function_der(itype_actual, distance) / distance;
+            pair_force = fpair;
             substate_cv_backforce[i][0] += fpair * delx;
             substate_cv_backforce[i][1] += fpair * dely;
             substate_cv_backforce[i][2] += fpair * delz;
             substate_cv_backforce[j][0] -= fpair * delx;
             substate_cv_backforce[j][1] -= fpair * dely;
             substate_cv_backforce[j][2] -= fpair * delz;
+            ev_tally(i,j,nlocal,newton_pair,0.0,0.0,pair_force,delx,dely,delz);
           }
+
         }
       }
     }
