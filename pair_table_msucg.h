@@ -13,25 +13,26 @@
 
 #ifdef PAIR_CLASS
 
-PairStyle(table,PairTable)
+PairStyle(table_msucg,PairTable_MSUCG)
 
 #else
 
-#ifndef LMP_PAIR_TABLE_H
-#define LMP_PAIR_TABLE_H
+#ifndef LMP_PAIR_TABLE_MSUCG_H
+#define LMP_PAIR_TABLE_MSUCG_H
 
 #include "pair.h"
 
 namespace LAMMPS_NS {
 
-class PairTable : public Pair {
+class PairTable_MSUCG : public Pair {
  public:
-  PairTable(class LAMMPS *);
-  virtual ~PairTable();
+  PairTable_MSUCG(class LAMMPS *);
+  virtual ~PairTable_MSUCG();
 
   virtual void compute(int, int);
   void settings(int, char **);
   void coeff(int, char **);
+  void init_style();
   double init_one(int, int);
   void write_restart(FILE *);
   void read_restart(FILE *);
@@ -57,7 +58,7 @@ class PairTable : public Pair {
   Table *tables;
 
   int **tabindex;
-
+  // Normal PairTable functions
   void allocate();
   void read_table(Table *, char *, char *);
   void param_extract(Table *, char *);
@@ -68,6 +69,35 @@ class PairTable : public Pair {
   void free_table(Table *);
   void spline(double *, double *, int, double, double, double *);
   double splint(double *, double *, double *, int, double);
+
+  // MSUCG functions and variables
+  double T, kT;     //  target temperature
+
+  int n_total_states;
+  int n_actual_types;
+  int max_states_per_type;
+  int state_params_allocated;
+  int *n_states_per_type;
+  int *actual_types_from_state;
+  int *use_state_entropy;
+  double *chemical_potentials;
+  double *cv_thresholds;
+  double *threshold_radii;
+  
+  double compute_proximity_function(int, double);
+  double compute_proximity_function_der(int, double);
+
+  void threshold_prob_and_partial_from_cv(int, double, double&, double&);
+  double **substate_probability, **substate_probability_partial, **substate_probability_force;
+  double **substate_cv_backforce;
+
+  int nmax;
+
+  int pack_reverse_comm(int, int, double *);
+  void unpack_reverse_comm(int, int *, double *);
+  int pack_forward_comm(int, int *, double *, int, int *);
+  void unpack_forward_comm(int, int, double *);
+
 };
 
 }

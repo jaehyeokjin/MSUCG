@@ -19,15 +19,26 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include "pair_table.h"
+#include "math.h"
+#include "pair_table_msucg.h"
 #include "atom.h"
 #include "force.h"
 #include "comm.h"
+#include "neighbor.h"
+#include "neigh_request.h"
 #include "neigh_list.h"
+#include "update.h"
+#include "integrate.h"
+#include "respa.h"
+#include "math_const.h"
 #include "memory.h"
 #include "error.h"
+#include "domain.h"
+#include "modify.h"
+#include "fix.h"
 
 using namespace LAMMPS_NS;
+using namespace MathConst;
 
 enum{NONE,RLINEAR,RSQ,BMP};
 
@@ -35,15 +46,26 @@ enum{NONE,RLINEAR,RSQ,BMP};
 
 /* ---------------------------------------------------------------------- */
 
-PairTable::PairTable(LAMMPS *lmp) : Pair(lmp)
+PairTable_MSUCG::PairTable_MSUCG(LAMMPS *lmp) : Pair(lmp)
 {
   ntables = 0;
   tables = NULL;
+  // From PAIR_MSUCG_NEIGH
+  nmax = 0;
+
+  substate_probability = NULL;
+  substate_probability_partial = NULL;
+  substate_probability_force = NULL;
+  substate_cv_backforce = NULL;
+  state_params_allocated = 0;
+
+  comm_reverse = 3;
+  comm_forward = 3;
 }
 
 /* ---------------------------------------------------------------------- */
 
-PairTable::~PairTable()
+PairTable_MSUCG::~PairTable_MSUCG()
 {
   for (int m = 0; m < ntables; m++) free_table(&tables[m]);
   memory->sfree(tables);
@@ -53,17 +75,114 @@ PairTable::~PairTable()
     memory->destroy(cutsq);
     memory->destroy(tabindex);
   }
+  if (state_params_allocated) {
+    memory->destroy(n_states_per_type);
+    memory->destroy(actual_types_from_state);
+    memory->destroy(use_state_entropy);
+    memory->destroy(chemical_potentials);
+    memory->destroy(cv_thresholds);
+    memory->destroy(threshold_radii);
+  }
 }
 
 /* ---------------------------------------------------------------------- */
 
-void PairTable::compute(int eflag, int vflag)
+void PairTable_MSUCG::threshold_prob_and_partial_from_cv(int type, double cv, double &prob, double &partial) {
+  double tanh_factor = tanh((cv - cv_thresholds[type]) / (0.1 * cv_thresholds[type]));
+  prob = 0.5 + 0.5 * tanh_factor;
+  partial = 0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * cv_thresholds[type]);
+}
+
+/* ---------------------------------------------------------------------- */
+
+int PairTable_MSUCG::pack_reverse_comm(int n, int first, double *buf)
+{
+  int i,m,last;
+
+  m = 0;
+  last = first + n;
+  for (i = first; i < last; i++) {
+    buf[m++] = substate_cv_backforce[i][0];
+    buf[m++] = substate_cv_backforce[i][1];
+    buf[m++] = substate_cv_backforce[i][2];
+  }
+  return m;
+}
+
+void PairTable_MSUCG::unpack_reverse_comm(int n, int *list, double *buf)
+{
+  int i,j,m;
+
+  m = 0;
+  for (i = 0; i < n; i++) {
+    j = list[i];
+    substate_cv_backforce[j][0] += buf[m++];
+    substate_cv_backforce[j][1] += buf[m++];
+    substate_cv_backforce[j][2] += buf[m++];
+  }
+}
+
+int PairTable_MSUCG::pack_forward_comm(int n, int *list, double *buf, int pbc_flag, int *pbc)
+{
+  int i,j,m,jsubstate;
+
+  m = 0;
+  for (i = 0; i < n; i++) {
+    j = list[i];
+    for (jsubstate = 0; jsubstate < max_states_per_type - 1; jsubstate++) {
+      buf[m++] = substate_probability[j][jsubstate];
+      buf[m++] = substate_probability_partial[j][jsubstate];
+      buf[m++] = substate_probability_force[j][jsubstate];
+    }
+  }
+  return m;
+}
+
+void PairTable_MSUCG::unpack_forward_comm(int n, int first, double *buf)
+{
+  int i,m,last,isubstate;
+
+  m = 0;
+  last = first + n;
+  for (i = first; i < last; i++) {
+    for (isubstate = 0; isubstate < max_states_per_type - 1; isubstate++) {
+      substate_probability[i][isubstate] = buf[m++];
+      substate_probability_partial[i][isubstate] = buf[m++];
+      substate_probability_force[i][isubstate] = buf[m++];
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+
+double PairTable_MSUCG::compute_proximity_function(int type, double distance) {
+  double tanh_factor = tanh((distance - threshold_radii[type]) / (0.1 * threshold_radii[type]));
+  return 0.5 * (1.0 - tanh_factor);
+}
+
+double PairTable_MSUCG::compute_proximity_function_der(int type, double distance) {
+  double tanh_factor = tanh((distance - threshold_radii[type]) / (0.1 * threshold_radii[type]));
+  return -0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * threshold_radii[type]);
+  // Sign in here should be checked
+}
+
+/* ---------------------------------------------------------------------- */
+
+void PairTable_MSUCG::compute(int eflag, int vflag)
 {
   int i,j,ii,jj,inum,jnum,itype,jtype,itable;
+  int itype_actual, jtype_actual;
   double xtmp,ytmp,ztmp,delx,dely,delz,evdwl,fpair;
   double rsq,factor_lj,fraction,value,a,b;
+  double distance,inumber_density,cv_force;
+  int isubstate,jsubstate,ksubstate,alpha,beta;
+  double alphaprob,betaprob;
+  double i_prob_accounted, j_prob_accounted;
   int *ilist,*jlist,*numneigh,**firstneigh;
   Table *tb;
+
+  double pair_force; // For updating in the ev_tally routine
+  double energy_lj; // Energy routine for ev_tally routine
 
   union_int_float_t rsq_lookup;
   int tlm1 = tablength - 1;
@@ -84,18 +203,110 @@ void PairTable::compute(int eflag, int vflag)
   numneigh = list->numneigh;
   firstneigh = list->firstneigh;
 
-  // loop over neighbors of my atoms
+  int nall = nlocal + atom->nghost;
+  if (nall > nmax) {
+    nmax = nall;
+    memory->grow(substate_probability, nall, max_states_per_type - 1, "pair/msucg:substate_probability");
+    memory->grow(substate_probability_partial, nall, max_states_per_type - 1, "pair/msucg:substate_probability_partial");
+    memory->grow(substate_probability_force, nall, max_states_per_type - 1, "pair/msucg:substate_probability_force");
+    memory->grow(substate_cv_backforce, nall, 3, "pair/msucg:substate_cv_backforce");
+  }
 
+  for(i = 0; i < nall; i++) {
+    for (j = 0; j < max_states_per_type - 1; j++) {
+      substate_probability[i][j] = 0.0;
+      substate_probability_partial[i][j] = 0.0;
+      substate_probability_force[i][j] = 0.0;
+    }
+    substate_cv_backforce[i][0] = 0.0;
+    substate_cv_backforce[i][1] = 0.0;
+    substate_cv_backforce[i][2] = 0.0;
+  }
+
+  // First loop: calculate the state probabilities.
   for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
     xtmp = x[i][0];
     ytmp = x[i][1];
     ztmp = x[i][2];
     itype = type[i];
+    itype_actual = actual_types_from_state[itype];
+    inumber_density = 0.0;
+    jlist = firstneigh[i];
+    jnum = numneigh[i];
+    
+    if (n_states_per_type[itype_actual] > 1) {
+      // For each particle with states, calculate the CV that 
+      // controls the state probability, in this case density.
+      for (jj = 0; jj < jnum; jj++) {
+        j = jlist[jj];
+        delx = xtmp - x[j][0];
+        dely = ytmp - x[j][1];
+        delz = ztmp - x[j][2];
+        rsq = delx * delx + dely * dely + delz * delz;
+        jtype = type[j];
+  
+        if (rsq < cutsq[itype][jtype]) {
+          distance = sqrt(rsq);
+          inumber_density += compute_proximity_function(itype_actual, distance);
+        }
+      }
+  
+      // Keep track of the probability and its partial derivative.
+      threshold_prob_and_partial_from_cv(itype_actual, inumber_density, substate_probability[i][0], substate_probability_partial[i][0]);
+    } else {
+      // For types without substates, simply assign p0 = 1.
+      // (No partial derivatives.)
+      substate_probability[i][0] = 1.0;
+    }
+    // printf("Particle %d has number_density %g and substate_probability %g given substate_threshold of %g for type %d with sigma cutoff : %g \n", i, inumber_density, substate_probability[i], cv_thresholds[itype_actual], itype, threshold_radii[itype_actual]);
+  }
+  // Communicate state probabilities forward.
+  comm->forward_comm_pair(this);
+
+  // Second loop: calculate all forces that do not depend on 
+  // probability derivatives and against the state distribution 
+  // as well.
+  for (ii = 0; ii < inum; ii++) {
+    i = ilist[ii];
+    xtmp = x[i][0];
+    ytmp = x[i][1];
+    ztmp = x[i][2];
+    itype = type[i];
+    itype_actual = actual_types_from_state[itype];
     jlist = firstneigh[i];
     jnum = numneigh[i];
 
+    // Compute single-body forces conjugate to state change.
+    // Apply to each of the state probabilities except the last,
+    // which is always kept implicit.
+    if (n_states_per_type[itype_actual] > 1) {
+      i_prob_accounted = 0.0;
+      // For each substate but the last, calculate the derivative
+      // of the free energy with respect to probability.
+      for (isubstate = 0; isubstate < n_states_per_type[itype_actual] - 1; isubstate++) {
+        // Calculate one-body-state entropic forces.
+        if (use_state_entropy[itype_actual]) {
+          substate_probability_force[i][isubstate] -= kT * log(substate_probability[i][isubstate]);
+        }
+        // Calculate one-body-state potential forces.
+        substate_probability_force[i][isubstate] -= chemical_potentials[itype + isubstate];
+        i_prob_accounted += substate_probability[i][isubstate];
+      }
+      // For the last substate, use conservation of probability to write
+      // its effect as force mediated through the other probabilities.
+      if (use_state_entropy[itype_actual]) {
+        for (isubstate = 0; isubstate < n_states_per_type[itype_actual] - 1; isubstate++) {
+          substate_probability_force[i][isubstate] += kT * log(1 - i_prob_accounted);
+        }
+      }
+    }
+
+    // Compute two-body forces at fixed state and effects of the
+    // two body potential on state change.
     for (jj = 0; jj < jnum; jj++) {
+      energy_lj = 0.0;
+      pair_force = 0.0;
       j = jlist[jj];
       factor_lj = special_lj[sbmask(j)];
       j &= NEIGHMASK;
@@ -105,69 +316,180 @@ void PairTable::compute(int eflag, int vflag)
       delz = ztmp - x[j][2];
       rsq = delx*delx + dely*dely + delz*delz;
       jtype = type[j];
+      jtype_actual = actual_types_from_state[jtype];
 
       if (rsq < cutsq[itype][jtype]) {
-        tb = &tables[tabindex[itype][jtype]];
-        if (rsq < tb->innersq)
-          error->one(FLERR,"Pair distance < table inner cutoff");
+        // Loop over all possible substates of particle i.
+        i_prob_accounted = 0;
+        for (isubstate = 0; isubstate < n_states_per_type[itype_actual]; isubstate++) {
+          alpha = itype + isubstate;
+          if (n_states_per_type[itype_actual] > 1) {
+            if (isubstate < n_states_per_type[itype_actual] - 1) {
+              alphaprob = substate_probability[i][isubstate];
+              i_prob_accounted += substate_probability[i][isubstate];
+            } else {
+              alphaprob = (1 - i_prob_accounted);
+            }
+          } else {
+            alphaprob = 1.0;
+          }
+          
+          // Iterate over all possible substates of particle j.
+          j_prob_accounted = 0;
+          for (jsubstate = 0; jsubstate < n_states_per_type[jtype_actual]; jsubstate++) {
+            beta = jtype + jsubstate;
+            if (n_states_per_type[jtype_actual] > 1) {
+              if (jsubstate < n_states_per_type[jtype_actual] - 1) {
+                betaprob = substate_probability[j][jsubstate];
+                j_prob_accounted += substate_probability[j][jsubstate];
+              } else {
+                betaprob = (1 - j_prob_accounted);
+              }
+            } else {
+              betaprob = 1.0;
+            }
 
-        if (tabstyle == LOOKUP) {
-          itable = static_cast<int> ((rsq - tb->innersq) * tb->invdelta);
-          if (itable >= tlm1)
-            error->one(FLERR,"Pair distance > table outer cutoff");
-          fpair = factor_lj * tb->f[itable];
-        } else if (tabstyle == LINEAR) {
-          itable = static_cast<int> ((rsq - tb->innersq) * tb->invdelta);
-          if (itable >= tlm1)
-            error->one(FLERR,"Pair distance > table outer cutoff");
-          fraction = (rsq - tb->rsq[itable]) * tb->invdelta;
-          value = tb->f[itable] + fraction*tb->df[itable];
-          fpair = factor_lj * value;
-        } else if (tabstyle == SPLINE) {
-          itable = static_cast<int> ((rsq - tb->innersq) * tb->invdelta);
-          if (itable >= tlm1)
-            error->one(FLERR,"Pair distance > table outer cutoff");
-          b = (rsq - tb->rsq[itable]) * tb->invdelta;
-          a = 1.0 - b;
-          value = a * tb->f[itable] + b * tb->f[itable+1] +
-            ((a*a*a-a)*tb->f2[itable] + (b*b*b-b)*tb->f2[itable+1]) *
-            tb->deltasq6;
-          fpair = factor_lj * value;
-        } else {
-          rsq_lookup.f = rsq;
-          itable = rsq_lookup.i & tb->nmask;
-          itable >>= tb->nshiftbits;
-          fraction = (rsq_lookup.f - tb->rsq[itable]) * tb->drsq[itable];
-          value = tb->f[itable] + fraction*tb->df[itable];
-          fpair = factor_lj * value;
+            tb = &tables[tabindex[alpha][beta]];
+            if (rsq < tb->innersq)
+              error->one(FLERR,"Pair distance < table inner cutoff");
+            if (tabstyle == LOOKUP) {
+              itable = static_cast<int> ((rsq - tb->innersq) * tb->invdelta);
+              if (itable >= tlm1)
+                error->one(FLERR,"Pair distance > table outer cutoff");
+              fpair = factor_lj * tb->f[itable];
+            } else if (tabstyle == LINEAR) {
+              itable = static_cast<int> ((rsq - tb->innersq) * tb->invdelta);
+              if (itable >= tlm1)
+                error->one(FLERR,"Pair distance > table outer cutoff");
+              fraction = (rsq - tb->rsq[itable]) * tb->invdelta;
+              value = tb->f[itable] + fraction*tb->df[itable];
+              fpair = factor_lj * value;
+            } else if (tabstyle == SPLINE) {
+              itable = static_cast<int> ((rsq - tb->innersq) * tb->invdelta);
+              if (itable >= tlm1)
+                error->one(FLERR,"Pair distance > table outer cutoff");
+              b = (rsq - tb->rsq[itable]) * tb->invdelta;
+              a = 1.0 - b;
+              value = a * tb->f[itable] + b * tb->f[itable+1] +
+                ((a*a*a-a)*tb->f2[itable] + (b*b*b-b)*tb->f2[itable+1]) *
+                tb->deltasq6;
+              fpair = factor_lj * value;
+            } else {
+              rsq_lookup.f = rsq;
+              itable = rsq_lookup.alpha & tb->nmask;
+              itable >>= tb->nshiftbits;
+              fraction = (rsq_lookup.f - tb->rsq[itable]) * tb->drsq[itable];
+              value = tb->f[itable] + fraction*tb->df[itable];
+              fpair = factor_lj * value;
+            }
+            // Scale the pair force force with current state weights
+            fpair = fpair * alphaprob * betaprob;
+            // Accumulate
+            f[i][0] += delx*fpair;
+            f[i][1] += dely*fpair;
+            f[i][2] += delz*fpair;
+            // Energy calculation from the tabluated potential
+            if (eflag) {
+              if (tabstyle == LOOKUP)
+                evdwl = tb->e[itable];
+              else if (tabstyle == LINEAR || tabstyle == BITMAP)
+                evdwl = tb->e[itable] + fraction*tb->de[itable];
+              else
+                evdwl = a * tb->e[itable] + b * tb->e[itable+1] +
+                  ((a*a*a-a)*tb->e2[itable] + (b*b*b-b)*tb->e2[itable+1]) *
+                  tb->deltasq6;
+              evdwl *= factor_lj;
+            }
+            // Scale the energy_lj and pair_force in order to tallying 
+            if (j < nlocal){
+              energy_lj += evdwl * alphaprob * betaprob * 0.5;
+              // Include in accumulating virial.
+              pair_force += fpair * 0.5;
+            }
+            else {
+              energy_lj += evdwl * alphaprob * betaprob;
+              // Include in accumulating virial.
+              pair_force += fpair;
+            if (n_states_per_type[itype_actual] > 1) {
+              if (isubstate < n_states_per_type[itype_actual] - 1) {
+                substate_probability_force[i][isubstate] -= betaprob * evdwl;
+              } else {
+                for (ksubstate = 0; ksubstate < n_states_per_type[itype_actual] - 1; ksubstate++) {
+                  substate_probability_force[i][ksubstate] += betaprob * evdwl;
+                }
+              }
+            }
+          }
         }
-
-        f[i][0] += delx*fpair;
-        f[i][1] += dely*fpair;
-        f[i][2] += delz*fpair;
-        if (newton_pair || j < nlocal) {
-          f[j][0] -= delx*fpair;
-          f[j][1] -= dely*fpair;
-          f[j][2] -= delz*fpair;
-        }
-
-        if (eflag) {
-          if (tabstyle == LOOKUP)
-            evdwl = tb->e[itable];
-          else if (tabstyle == LINEAR || tabstyle == BITMAP)
-            evdwl = tb->e[itable] + fraction*tb->de[itable];
-          else
-            evdwl = a * tb->e[itable] + b * tb->e[itable+1] +
-              ((a*a*a-a)*tb->e2[itable] + (b*b*b-b)*tb->e2[itable+1]) *
-              tb->deltasq6;
-          evdwl *= factor_lj;
-        }
-
-        if (evflag) ev_tally(i,j,nlocal,newton_pair,
-                             evdwl,0.0,fpair,delx,dely,delz);
+        if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
       }
     }
   }
+
+  // Third loop: calculate forces from probability derivatives 
+  // on local atoms.
+  // Forces from local atom probabilities on ghosts must be 
+  // reverse communicated.
+  for (ii = 0; ii < inum; ii++) {
+    i = ilist[ii];
+    xtmp = x[i][0];
+    ytmp = x[i][1];
+    ztmp = x[i][2];
+    itype = type[i];
+    itype_actual = actual_types_from_state[itype];
+    jlist = firstneigh[i];
+    jnum = numneigh[i];
+
+    if (n_states_per_type[itype_actual] > 1) {
+
+      for (isubstate = 0; isubstate < n_states_per_type[itype_actual] - 1; isubstate++) {
+        
+        // Convert force against the state to force against the CV
+        // by using the partial of state with respect to CV.
+        cv_force = substate_probability_force[i][isubstate] * substate_probability_partial[i][isubstate];
+  
+        // Apply the force against the CV, in this case density.
+        for (jj = 0; jj < jnum; jj++) {
+          j = jlist[jj];
+          delx = xtmp - x[j][0];
+          dely = ytmp - x[j][1];
+          delz = ztmp - x[j][2];
+          rsq = delx * delx + dely * dely + delz * delz;
+          jtype = type[j];
+          pair_force = 0.0;
+  
+          // Distribute the force down to every pair of particles
+          // contributing to the density.
+          if (rsq < cutsq[itype][jtype]) {
+            distance = sqrt(rsq);
+            fpair = cv_force * compute_proximity_function_der(itype_actual, distance) / distance;
+            pair_force = fpair;
+            substate_cv_backforce[i][0] += fpair * delx;
+            substate_cv_backforce[i][1] += fpair * dely;
+            substate_cv_backforce[i][2] += fpair * delz;
+            substate_cv_backforce[j][0] -= fpair * delx;
+            substate_cv_backforce[j][1] -= fpair * dely;
+            substate_cv_backforce[j][2] -= fpair * delz;
+            ev_tally(i,j,nlocal,newton_pair,0.0,0.0,pair_force,delx,dely,delz);
+          }
+        }
+      }
+    }
+  }
+  comm->reverse_comm_pair(this);
+  
+  // Add the CV forces to the other forces.
+  for (ii = 0; ii < inum; ii++) {
+    i = ilist[ii];
+    f[i][0] += substate_cv_backforce[i][0];
+    f[i][1] += substate_cv_backforce[i][1];
+    f[i][2] += substate_cv_backforce[i][2];
+  }
+  // Calculation check 
+  //for (ii = 0; ii < inum; ii++) {
+  //  i = ilist[ii];
+  //  fprintf(screen, "Force: (%8.4E, %8.4E, %8.4E) on %d(%8.4E, %8.4E, %8.4E)  \n", f[i][0], f[i][1], f[i][2], i,x[i][0],x[i][1],x[i][2]);
+  // }
 
   if (vflag_fdotr) virial_fdotr_compute();
 }
@@ -176,7 +498,7 @@ void PairTable::compute(int eflag, int vflag)
    allocate all arrays
 ------------------------------------------------------------------------- */
 
-void PairTable::allocate()
+void PairTable_MSUCG::allocate()
 {
   allocated = 1;
   const int nt = atom->ntypes + 1;
@@ -194,7 +516,7 @@ void PairTable::allocate()
    global settings
 ------------------------------------------------------------------------- */
 
-void PairTable::settings(int narg, char **arg)
+void PairTable_MSUCG::settings(int narg, char **arg)
 {
   if (narg < 2) error->all(FLERR,"Illegal pair_style command");
 
@@ -243,7 +565,7 @@ void PairTable::settings(int narg, char **arg)
    set coeffs for one or more type pairs
 ------------------------------------------------------------------------- */
 
-void PairTable::coeff(int narg, char **arg)
+void PairTable_MSUCG::coeff(int narg, char **arg)
 {
   if (narg != 4 && narg != 5) error->all(FLERR,"Illegal pair_coeff command");
   if (!allocated) allocate();
@@ -318,10 +640,83 @@ void PairTable::coeff(int narg, char **arg)
 }
 
 /* ----------------------------------------------------------------------
+   init style needed to declare the full neighborlist and kT term (one-body) on
+------------------------------------------------------------------------- */
+
+void PairTable_MSUCG::init_style()
+{
+  // request regular or rRESPA neighbor lists
+
+  int irequest;
+  int newton_pair = force->newton_pair;
+
+  if (update->whichflag == 1 && strstr(update->integrate_style,"respa")) {
+    int respa = 0;
+    if (((Respa *) update->integrate)->level_inner >= 0) respa = 1;
+    if (((Respa *) update->integrate)->level_middle >= 0) respa = 2;
+
+    if (respa == 0) irequest = neighbor->request(this,instance_me);
+    else if (respa == 1) {
+      irequest = neighbor->request(this,instance_me);
+      neighbor->requests[irequest]->id = 1;
+      neighbor->requests[irequest]->half = 0;
+      neighbor->requests[irequest]->respainner = 1;
+      irequest = neighbor->request(this,instance_me);
+      neighbor->requests[irequest]->id = 3;
+      neighbor->requests[irequest]->half = 0;
+      neighbor->requests[irequest]->respaouter = 1;
+    } else {
+      irequest = neighbor->request(this,instance_me);
+      neighbor->requests[irequest]->id = 1;
+      neighbor->requests[irequest]->half = 0;
+      neighbor->requests[irequest]->respainner = 1;
+      irequest = neighbor->request(this,instance_me);
+      neighbor->requests[irequest]->id = 2;
+      neighbor->requests[irequest]->half = 0;
+      neighbor->requests[irequest]->respamiddle = 1;
+      irequest = neighbor->request(this,instance_me);
+      neighbor->requests[irequest]->id = 3;
+      neighbor->requests[irequest]->half = 0;
+      neighbor->requests[irequest]->respaouter = 1;
+    }
+
+  } else{
+    irequest = neighbor->request(this,instance_me);
+    neighbor->requests[irequest]->half=0;
+    neighbor->requests[irequest]->full=1;
+  }
+  // set rRESPA cutoffs
+
+  if (strstr(update->integrate_style,"respa") &&
+      ((Respa *) update->integrate)->level_inner >= 0)
+    cut_respa = ((Respa *) update->integrate)->cutoff;
+  else cut_respa = NULL;
+
+  /*---YP--- Obtain thermostat temperature */
+
+  double *pT = NULL;
+  int pdim;
+
+  for(int ifix = 0; ifix < modify->nfix; ifix++)
+  {
+    pT = (double*) modify->fix[ifix]->extract("t_target", pdim);
+    if(pT) { T = (*pT); break; }
+  }
+
+  if(pT==NULL) error->all(FLERR, "Cannot locate temperature target from thermostat.");
+  else fprintf(screen, "Pair/MSUCG Ensemble temperature is %lf.\n", T);
+
+  kT = force->boltz * T;
+
+  if(newton_pair != 0) error->all(FLERR, "Newton pair is turned on. It has to be turned off in local density UCG simulation.");
+
+}
+
+/* ----------------------------------------------------------------------
    init for one type pair i,j and corresponding j,i
 ------------------------------------------------------------------------- */
 
-double PairTable::init_one(int i, int j)
+double PairTable_MSUCG::init_one(int i, int j)
 {
   if (setflag[i][j] == 0) error->all(FLERR,"All pair coeffs are not set");
 
@@ -337,7 +732,7 @@ double PairTable::init_one(int i, int j)
      ninput,rfile,efile,ffile,rflag,rlo,rhi,fpflag,fplo,fphi,ntablebits
 ------------------------------------------------------------------------- */
 
-void PairTable::read_table(Table *tb, char *file, char *keyword)
+void PairTable_MSUCG::read_table(Table *tb, char *file, char *keyword)
 {
   char line[MAXLINE];
 
@@ -428,7 +823,7 @@ void PairTable::read_table(Table *tb, char *file, char *keyword)
      ninput,rfile,efile,ffile,rflag,rlo,rhi,fpflag,fplo,fphi
 ------------------------------------------------------------------------- */
 
-void PairTable::bcast_table(Table *tb)
+void PairTable_MSUCG::bcast_table(Table *tb)
 {
   MPI_Bcast(&tb->ninput,1,MPI_INT,0,world);
 
@@ -461,7 +856,7 @@ void PairTable::bcast_table(Table *tb)
    this function sets these values in Table: e2file,f2file
 ------------------------------------------------------------------------- */
 
-void PairTable::spline_table(Table *tb)
+void PairTable_MSUCG::spline_table(Table *tb)
 {
   memory->create(tb->e2file,tb->ninput,"pair:e2file");
   memory->create(tb->f2file,tb->ninput,"pair:f2file");
@@ -487,7 +882,7 @@ void PairTable::spline_table(Table *tb)
    N is required, other params are optional
 ------------------------------------------------------------------------- */
 
-void PairTable::param_extract(Table *tb, char *line)
+void PairTable_MSUCG::param_extract(Table *tb, char *line)
 {
   tb->ninput = 0;
   tb->rflag = NONE;
@@ -527,7 +922,7 @@ void PairTable::param_extract(Table *tb, char *line)
    compute r,e,f vectors from splined values
 ------------------------------------------------------------------------- */
 
-void PairTable::compute_table(Table *tb)
+void PairTable_MSUCG::compute_table(Table *tb)
 {
   int tlm1 = tablength-1;
 
@@ -769,7 +1164,7 @@ void PairTable::compute_table(Table *tb)
    set all ptrs in a table to NULL, so can be freed safely
 ------------------------------------------------------------------------- */
 
-void PairTable::null_table(Table *tb)
+void PairTable_MSUCG::null_table(Table *tb)
 {
   tb->rfile = tb->efile = tb->ffile = NULL;
   tb->e2file = tb->f2file = NULL;
@@ -781,7 +1176,7 @@ void PairTable::null_table(Table *tb)
    free all arrays in a table
 ------------------------------------------------------------------------- */
 
-void PairTable::free_table(Table *tb)
+void PairTable_MSUCG::free_table(Table *tb)
 {
   memory->destroy(tb->rfile);
   memory->destroy(tb->efile);
@@ -803,7 +1198,7 @@ void PairTable::free_table(Table *tb)
    spline and splint routines modified from Numerical Recipes
 ------------------------------------------------------------------------- */
 
-void PairTable::spline(double *x, double *y, int n,
+void PairTable_MSUCG::spline(double *x, double *y, int n,
                        double yp1, double ypn, double *y2)
 {
   int i,k;
@@ -835,7 +1230,7 @@ void PairTable::spline(double *x, double *y, int n,
 
 /* ---------------------------------------------------------------------- */
 
-double PairTable::splint(double *xa, double *ya, double *y2a, int n, double x)
+double PairTable_MSUCG::splint(double *xa, double *ya, double *y2a, int n, double x)
 {
   int klo,khi,k;
   double h,b,a,y;
@@ -859,7 +1254,7 @@ double PairTable::splint(double *xa, double *ya, double *y2a, int n, double x)
    proc 0 writes to restart file
 ------------------------------------------------------------------------- */
 
-void PairTable::write_restart(FILE *fp)
+void PairTable_MSUCG::write_restart(FILE *fp)
 {
   write_restart_settings(fp);
 }
@@ -868,7 +1263,7 @@ void PairTable::write_restart(FILE *fp)
    proc 0 reads from restart file, bcasts
 ------------------------------------------------------------------------- */
 
-void PairTable::read_restart(FILE *fp)
+void PairTable_MSUCG::read_restart(FILE *fp)
 {
   read_restart_settings(fp);
   allocate();
@@ -878,7 +1273,7 @@ void PairTable::read_restart(FILE *fp)
    proc 0 writes to restart file
 ------------------------------------------------------------------------- */
 
-void PairTable::write_restart_settings(FILE *fp)
+void PairTable_MSUCG::write_restart_settings(FILE *fp)
 {
   fwrite(&tabstyle,sizeof(int),1,fp);
   fwrite(&tablength,sizeof(int),1,fp);
@@ -893,7 +1288,7 @@ void PairTable::write_restart_settings(FILE *fp)
    proc 0 reads from restart file, bcasts
 ------------------------------------------------------------------------- */
 
-void PairTable::read_restart_settings(FILE *fp)
+void PairTable_MSUCG::read_restart_settings(FILE *fp)
 {
   if (comm->me == 0) {
     fread(&tabstyle,sizeof(int),1,fp);
@@ -915,7 +1310,7 @@ void PairTable::read_restart_settings(FILE *fp)
 
 /* ---------------------------------------------------------------------- */
 
-double PairTable::single(int i, int j, int itype, int jtype, double rsq,
+double PairTable_MSUCG::single(int i, int j, int itype, int jtype, double rsq,
                          double factor_coul, double factor_lj,
                          double &fforce)
 {
@@ -972,7 +1367,7 @@ double PairTable::single(int i, int j, int itype, int jtype, double rsq,
      no way to know which tables are active since pair::init() not yet called
 ------------------------------------------------------------------------- */
 
-void *PairTable::extract(const char *str, int &dim)
+void *PairTable_MSUCG::extract(const char *str, int &dim)
 {
   if (strcmp(str,"cut_coul") != 0) return NULL;
   if (ntables == 0) error->all(FLERR,"All pair coeffs are not set");
