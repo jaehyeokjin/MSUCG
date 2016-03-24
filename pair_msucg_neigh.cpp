@@ -439,7 +439,6 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
             substate_cv_backforce[j][2] -= fpair * delz;
             ev_tally(i,j,nlocal,newton_pair,0.0,0.0,pair_force,delx,dely,delz);
           }
-
         }
       }
     }

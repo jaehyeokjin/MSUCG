@@ -60,8 +60,6 @@ class PairMSUCG_NEIGH : public Pair {
 
 
   //  All the contents above are from pair_lj_cut.* source
-  //  In-house codes starts from here
-
   double T, kT;     //  target temperature
 
   /* Force check parameter */
