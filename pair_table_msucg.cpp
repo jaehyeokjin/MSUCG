@@ -15,10 +15,10 @@
    Contributing author: Paul Crozier (SNL)
 ------------------------------------------------------------------------- */
 
-#include <mpi.h>
-#include <math.h>
-#include <stdlib.h>
-#include <string.h>
+#include "mpi.h"
+#include "math.h"
+#include "stdlib.h"
+#include "string.h"
 #include "math.h"
 #include "pair_table_msucg.h"
 #include "atom.h"
@@ -520,7 +520,7 @@ void PairTable_MSUCG::settings(int narg, char **arg)
 {
   if (narg < 2) error->all(FLERR,"Illegal pair_style command");
 
-  // new settings
+  // Tabulated potential settings
 
   if (strcmp(arg[0],"lookup") == 0) tabstyle = LOOKUP;
   else if (strcmp(arg[0],"linear") == 0) tabstyle = LINEAR;
@@ -534,7 +534,7 @@ void PairTable_MSUCG::settings(int narg, char **arg)
   // optional keywords
   // assert the tabulation is compatible with a specific long-range solver
 
-  int iarg = 2;
+  int iarg = 3;
   while (iarg < narg) {
     if (strcmp(arg[iarg],"ewald") == 0) ewaldflag = 1;
     else if (strcmp(arg[iarg],"pppm") == 0) pppmflag = 1;
@@ -544,6 +544,9 @@ void PairTable_MSUCG::settings(int narg, char **arg)
     else error->all(FLERR,"Illegal pair_style command");
     iarg++;
   }
+
+  // Read in a state definition file
+  read_state_settings(arg[2]);
 
   // delete old tables, since cannot just change settings
 
@@ -559,6 +562,96 @@ void PairTable_MSUCG::settings(int narg, char **arg)
 
   ntables = 0;
   tables = NULL;
+}
+
+void PairTable_MSUCG::read_state_settings(const char *file) {
+  char *eof;
+  char line[MAXLINE];
+  char state_type[MAXLINE];
+  char entropy_spec[MAXLINE];
+
+  // Open the state settings file.
+  FILE* fp = fopen(file, "r");
+  if (fp == NULL) {
+    char str[128];
+    sprintf(str, "Cannot open file %s", file);
+    error->one(FLERR, str);
+  }
+
+  // Read the total number of actual types and total number of states.
+  eof = fgets(line, MAXLINE, fp);
+  if (eof == NULL) error->one(FLERR,"Unexpected end of MSUCG state settings file");
+  sscanf(line,"%d %d", &n_actual_types, &n_total_states);
+
+  // Allocate space for storing state settings based on the number
+  // of actual types.
+  memory->create(n_states_per_type, n_actual_types + 1, "pair:n_states_per_type");
+  memory->create(actual_types_from_state, n_total_states + 1, "pair:n_states_per_type");
+  memory->create(use_state_entropy, n_actual_types + 1, "pair:n_states_per_type");
+  memory->create(chemical_potentials, n_total_states + 1, "pair:n_states_per_type");
+  memory->create(cv_thresholds, n_actual_types + 1, "pair:n_states_per_type");
+  memory->create(threshold_radii, n_actual_types + 1, "pair:n_states_per_type");
+  
+  state_params_allocated = 1;
+
+  for (int i = 0; i <= n_total_states; i++) {
+    chemical_potentials[i] = 0.0;
+    actual_types_from_state[i] = 0;
+  }
+  for (int i = 0; i <= n_actual_types; i++) {
+    n_states_per_type[i] = 0;
+    use_state_entropy[i] = 0;
+    cv_thresholds[i] = 0.0;
+    threshold_radii[i] = 0.0;
+  }
+
+  // For each actual type, read the number of states for that type, and
+  // (if more than one) the density threshold, the threshold radius for
+  // the density, and the one-body chemical potential for the state.
+  int curr_state = 1;
+  max_states_per_type = 2;
+  for (int i = 1; i <= n_actual_types; i++) {
+    // Read the number of states and way that they are assigned.
+    eof = fgets(line, MAXLINE, fp);
+    if (eof == NULL) error->one(FLERR,"Unexpected end of MSUCG state settings file");
+    sscanf(line, "%d %s %s", &n_states_per_type[i], state_type, entropy_spec);
+    max_states_per_type = std::max(max_states_per_type, n_states_per_type[i]);
+    if (strcmp(state_type, "use_entropy") == 0) {
+      use_state_entropy[i] = 1;
+    } else if (strcmp(state_type, "no_entropy") == 0) {
+      use_state_entropy[i] = 0;
+    }
+
+    // If this type has more than one state, read further state parameters.
+    if (n_states_per_type[i] > 1) {
+      // Read state probability assignment parameters.
+      if (strcmp(state_type, "density") == 0) {
+        eof = fgets(line, MAXLINE, fp);
+        if (eof == NULL) error->one(FLERR,"Unexpected end of MSUCG state settings file");
+        sscanf(line, "%lg %lg", &cv_thresholds[i], &threshold_radii[i]);
+      } else {
+        error->one(FLERR,"Unknown state assignment type for MSUCG");
+      }
+      // Read state chemical potentials.
+      eof = fgets(line, MAXLINE, fp);
+      if (eof == NULL) error->one(FLERR,"Unexpected end of MSUCG state settings file");
+      char *p = strtok(line, " ");
+      for (int j = 0; j < n_states_per_type[i] - 1; j++) {
+        sscanf(p, "%lg", &chemical_potentials[i + j]);
+        p = strtok(NULL, " ");
+      }
+    }
+
+    // Keep an up-to-date back-map from state ids to actual type ids.
+    for (int j = 0; j < n_states_per_type[i]; j++) {
+      actual_types_from_state[curr_state] = i;
+      curr_state++;
+    }
+  }
+  comm_forward = 3 * (max_states_per_type - 1);
+
+  // Close after finishing.
+  fclose(fp);
 }
 
 /* ----------------------------------------------------------------------
