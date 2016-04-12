@@ -19,7 +19,7 @@ force = []
 time_element = 0
 
 # PBC consideration
-xlo = xhi = ylo = yhi = zlo = zhi = 0.0
+xlo = xhi = ylo = yhi = zlo = zhi = box_size = 0.0
 axis_read = 0  # Used to read the axis information from trj file for each frame
 
 # Wrapping function
@@ -64,8 +64,9 @@ for line in f:
         if (axis_read == 2):
             zlo = float(line_element[0])
             zhi = float(line_element[1])
+            box_size = zhi-zlo
             axis_read = 0
-        pbc_str = "0.00000 43.11145\n"
+        pbc_str = "0.00000" + ' %2.5f\n' % (box_size)
         out_data.write(pbc_str)
     if(k == 0 and line_element[0] != 'ITEM:'):  # Scan for all
         # In this file, we know that the input lammpstrj file is sorted by id
@@ -135,7 +136,7 @@ for line in f:
                     neopentane_force.append(temp_force)
                 # Calculate the delta postition (fix the first particle as the origin)
                 dx = []
-                for j in range(0, 17):
+                for j in range(1, 17):
                     delta = [neopentane[j][0]-neopentane[0][0], neopentane[j][1]-neopentane[0][1], neopentane[j][2]-neopentane[0][2]]
                     for ii in range(0, 3):
                         while(delta[ii] > box_size/2.0 or delta[ii] < -0.5 * box_size):  # PBC consideration
