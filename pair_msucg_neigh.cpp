@@ -151,7 +151,7 @@ double compute_proximity_function(double distance, double distance_threshold) {
 
 double compute_proximity_function_der(double distance, double distance_threshold) {
   double tanh_factor = tanh((distance - distance_threshold) / (0.1 * distance_threshold));
-  return -0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * distance_threshold);
+  return 0.5 * (1.0 - tanh_factor * tanh_factor) / (0.1 * distance_threshold);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -373,6 +373,9 @@ void PairMSUCG_NEIGH::compute(int eflag, int vflag)
         ev_tally(i,j,nlocal,newton_pair,0.0,0.0,pair_force,delx,dely,delz);
       }
     }
+  }
+  for(ii=0;ii<3;ii++){
+    fprintf(screen, "Iteration number : %d \n Particle %d position: (%lf,%lf,%lf) \n Totalforce: (%8.4E,%8.4E,%8.4E) \n", countiter, i, x[ii][0],x[ii][1],x[ii][2],f[ii][0],f[ii][1],f[ii][2]);
   }
 	if (vflag_fdotr) virial_fdotr_compute();
 }
