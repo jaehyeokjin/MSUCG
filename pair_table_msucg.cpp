@@ -485,11 +485,6 @@ void PairTable_MSUCG::compute(int eflag, int vflag)
     f[i][1] += substate_cv_backforce[i][1];
     f[i][2] += substate_cv_backforce[i][2];
   }
-  // Calculation check 
-  //for (ii = 0; ii < inum; ii++) {
-  //  i = ilist[ii];
-  //  fprintf(screen, "Force: (%8.4E, %8.4E, %8.4E) on %d(%8.4E, %8.4E, %8.4E)  \n", f[i][0], f[i][1], f[i][2], i,x[i][0],x[i][1],x[i][2]);
-  // }
 
   if (vflag_fdotr) virial_fdotr_compute();
 }
@@ -616,9 +611,9 @@ void PairTable_MSUCG::read_state_settings(const char *file) {
     if (eof == NULL) error->one(FLERR,"Unexpected end of MSUCG state settings file");
     sscanf(line, "%d %s %s", &n_states_per_type[i], state_type, entropy_spec);
     max_states_per_type = std::max(max_states_per_type, n_states_per_type[i]);
-    if (strcmp(state_type, "use_entropy") == 0) {
+    if (strcmp(entropy_spec, "use_entropy") == 0) {
       use_state_entropy[i] = 1;
-    } else if (strcmp(state_type, "no_entropy") == 0) {
+    } else if (strcmp(entropy_spec, "no_entropy") == 0) {
       use_state_entropy[i] = 0;
     }
 
