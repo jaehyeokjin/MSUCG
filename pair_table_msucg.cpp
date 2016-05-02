@@ -376,7 +376,7 @@ void PairTable_MSUCG::compute(int eflag, int vflag)
               fpair = factor_lj * value;
             } else {
               rsq_lookup.f = rsq;
-              itable = rsq_lookup.alpha & tb->nmask;
+              itable = rsq_lookup.i & tb->nmask;
               itable >>= tb->nshiftbits;
               fraction = (rsq_lookup.f - tb->rsq[itable]) * tb->drsq[itable];
               value = tb->f[itable] + fraction*tb->df[itable];
