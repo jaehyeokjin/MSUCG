@@ -34,26 +34,24 @@ using namespace LAMMPS_NS;
 ComputeCoordTanhAtom::ComputeCoordTanhAtom(LAMMPS *lmp, int narg, char **arg) :
   Compute(lmp, narg, arg)
 {
-  if (narg < 5) error->all(FLERR,"Illegal compute coord_tanh/atom command");
+  if (narg < 4) error->all(FLERR,"Illegal compute coord/atom command");
 
   double cutoff = force->numeric(FLERR,arg[3]);
-  // This compute command needs cutoff threshold 
-  // to count the neighboring particles using sigmoid function
-  cut_th = atof(arg[5]);
-  cutsq = cutoff*cutoff;
+  cut_th = cutoff;
+  cutsq = cutoff*cutoff;  // Just in case, but this will not be used in this code.
 
-  ncol = narg-5 + 1;
+  ncol = narg-4 + 1;
   int ntypes = atom->ntypes;
   typelo = new int[ncol];
   typehi = new int[ncol];
 
-  if (narg == 5) {
+  if (narg == 4) {
     ncol = 1;
     typelo[0] = 1;
     typehi[0] = ntypes;
-  } else { // with type 1, type 2 commands (not used in this work)
+  } else {
     ncol = 0;
-    int iarg = 5;
+    int iarg = 4;
     while (iarg < narg) {
       force->bounds(arg[iarg],ntypes,typelo[ncol],typehi[ncol]);
       if (typelo[ncol] > typehi[ncol])
@@ -179,7 +177,7 @@ void ComputeCoordTanhAtom::compute_peratom()
           delz = ztmp - x[j][2];
           rsq = delx*delx + dely*dely + delz*delz;
           distance = sqrt(rsq);
-          if (rsq < cutsq && jtype >= typelo[0] && jtype <= typehi[0]){
+          if (jtype >= typelo[0] && jtype <= typehi[0]){
             n += 0.5*(1.0-tanh((distance-cut_th)/(0.1*cut_th)));
           }
         }
@@ -211,13 +209,9 @@ void ComputeCoordTanhAtom::compute_peratom()
           dely = ytmp - x[j][1];
           delz = ztmp - x[j][2];
           rsq = delx*delx + dely*dely + delz*delz;
-          distance = sqrt(rsq);
-          if (rsq < cutsq) {
-            for (m = 0; m < ncol; m++)
-              if (jtype >= typelo[m] && jtype <= typehi[m])
-
-                count[m] += 0.5*(1.0-tanh((distance-cut_th)/(0.1*cut_th)));
-          }
+          for (m = 0; m < ncol; m++)
+            if (jtype >= typelo[m] && jtype <= typehi[m])
+              count[m] += 0.5*(1.0-tanh((distance-cut_th)/(0.1*cut_th)));
         }
       }
     }
