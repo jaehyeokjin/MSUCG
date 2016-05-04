@@ -86,7 +86,7 @@ class PairTable_MSUCG : public Pair {
   
   double compute_proximity_function(int, double);
   double compute_proximity_function_der(int, double);
-
+  void read_state_settings(const char *);
   void threshold_prob_and_partial_from_cv(int, double, double&, double&);
   double **substate_probability, **substate_probability_partial, **substate_probability_force;
   double **substate_cv_backforce;
