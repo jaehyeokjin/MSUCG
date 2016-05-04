@@ -410,18 +410,19 @@ void PairTable_MSUCG::compute(int eflag, int vflag)
               energy_lj += evdwl * alphaprob * betaprob;
               // Include in accumulating virial.
               pair_force += fpair;
-            if (n_states_per_type[itype_actual] > 1) {
-              if (isubstate < n_states_per_type[itype_actual] - 1) {
-                substate_probability_force[i][isubstate] -= betaprob * evdwl;
-              } else {
-                for (ksubstate = 0; ksubstate < n_states_per_type[itype_actual] - 1; ksubstate++) {
-                  substate_probability_force[i][ksubstate] += betaprob * evdwl;
+              if (n_states_per_type[itype_actual] > 1) {
+                if (isubstate < n_states_per_type[itype_actual] - 1) {
+                  substate_probability_force[i][isubstate] -= betaprob * evdwl;
+                } else {
+                  for (ksubstate = 0; ksubstate < n_states_per_type[itype_actual] - 1; ksubstate++) {
+                    substate_probability_force[i][ksubstate] += betaprob * evdwl;
+                  }
                 }
               }
             }
           }
         }
-        if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
+      if (evflag) ev_tally(i,j,nlocal,newton_pair,energy_lj,0.0,pair_force,delx,dely,delz);
       }
     }
   }
@@ -773,13 +774,13 @@ void PairTable_MSUCG::init_style()
     neighbor->requests[irequest]->half=0;
     neighbor->requests[irequest]->full=1;
   }
-  // set rRESPA cutoffs
+  /* set rRESPA cutoffs
 
   if (strstr(update->integrate_style,"respa") &&
       ((Respa *) update->integrate)->level_inner >= 0)
     cut_respa = ((Respa *) update->integrate)->cutoff;
   else cut_respa = NULL;
-
+  */
   /*---YP--- Obtain thermostat temperature */
 
   double *pT = NULL;
