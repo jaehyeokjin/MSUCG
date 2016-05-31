@@ -30,6 +30,8 @@ pos_neo_y = numpy.zeros(neo_particles)
 pos_neo_z = numpy.zeros(neo_particles)
 
 w = numpy.zeros(n_particles) # Sub-state assignment is only needed for methanol molecules
+less_p = numpy.zeros(n_particles)
+
 # Unwrap function
 def unwrap(pos, xlo, xhi):
     returnvalue = pos* (xhi-xlo) + xlo
@@ -73,12 +75,13 @@ with open(filename, "r") as filestream:
                 time_element = int(line_elements[0])
                 print(time_element)
                 if (n_particles_read > 0):
+                    # Calculate the less_p array from w array
+                    less_p = 0.5 * (1.0 - numpy.tanh((w - wcut) / (0.1 * wcut)))
                     g_temp = numpy.zeros(nhis)
                     poi = 0.0
                     poii = 0.0
                     for i in range(0, n_particles):
-                        tan_factor = math.tanh((w[i] - wcut) / (0.1 * wcut))
-                        poi += 0.5*(1.0-tan_factor)
+                        poi += less_p[i]
                         for j in range(0, neo_particles):
                             while (pos_x[i] < 0.0 or pos_x[i] > box):
                                 if (pos_x[i] < 0.0):
@@ -118,8 +121,7 @@ with open(filename, "r") as filestream:
                             pos_dz = pos_dz - box * round(pos_dz / box)
                             dist = (pos_dx * pos_dx + pos_dy *
                                     pos_dy + pos_dz * pos_dz)**(0.5)
-                            tan_i = math.tanh((w[i] - wcut) / (0.1 * wcut))
-                            p_i = 0.5*(1.0-tan_i)
+                            p_i = less_p[i]
                             p_j = 1.0
                             poii += p_i*p_j
                             if dist < (g_end):
@@ -149,6 +151,7 @@ with open(filename, "r") as filestream:
                     pos_neo_y = numpy.zeros(neo_particles)
                     pos_neo_z = numpy.zeros(neo_particles)
                     w = numpy.zeros(n_particles)
+                    less_p = numpy.zeros(n_particles)
                     update = 1
                 if (average_number > 0 and update == 1):
                     update = 0

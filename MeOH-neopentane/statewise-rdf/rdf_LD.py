@@ -25,6 +25,9 @@ pos_y = numpy.zeros(n_particles)
 pos_z = numpy.zeros(n_particles)
 
 w = numpy.zeros(n_particles) # Sub-state assignment is only needed for methanol molecules
+dense_p = numpy.zeros(n_particles)
+less_p = numpy.zeros(n_particles)
+
 # Unwrap function
 
 # Other control flow variables
@@ -60,14 +63,15 @@ with open(filename, "r") as filestream:
                 time_element = int(line_elements[0])
                 print(time_element)
                 if (n_particles_read > 0):
+                    dense_p = 0.5 * (1.0 + numpy.tanh((w - wcut) / (0.1 * wcut)))
+                    less_p = 0.5 * (1.0 - numpy.tanh((w - wcut) / (0.1 * wcut)))
                     g_temp = numpy.zeros(nhis)
                     poi = 0.0
                     poj = 0.0
                     poii = 0.0
                     for i in range(0, n_particles):
-                        tan_factor = math.tanh((w[i] - wcut) / (0.1 * wcut))
-                        poi += 0.5*(1.0-tan_factor)
-                        poj += 0.5*(1.0+tan_factor)
+                        poi += less_p[i]
+                        poj += dense_p[i]
                         for j in range(0, n_particles):
                             if i!=j:
                                 while (pos_x[i] < 0.0 or pos_x[i] > box):
@@ -107,17 +111,15 @@ with open(filename, "r") as filestream:
                                 pos_dz = pos_z[i] - pos_z[j]
                                 pos_dz = pos_dz - box * round(pos_dz / box)
                                 dist = (pos_dx * pos_dx + pos_dy * pos_dy + pos_dz * pos_dz)**(0.5)
-                                tan_i = math.tanh((w[i] - wcut) / (0.1 * wcut))
-                                tan_j = math.tanh((w[j] - wcut) / (0.1 * wcut))
-                                p_i = 0.5*(1.0-tan_i)
-                                p_j = 0.5*(1.0+tan_j)
+                                p_i = less_p[i]
+                                p_j = dense_p[j]
                                 poii += p_i*p_j
                                 if dist < (g_end):
                                     ig = int(dist / delg)
                                     g_temp[ig] += p_i * p_j
                     if (poi > 0.0):
                         number_density = (poi) / (box * box * box)
-                        average_number  = poii
+                        average_number = poii
                     # Normalize the temp histogram if it is nonzero.
                     # Flag if it is zero. (In this case that is impossible.)
                     if (poi > 0.0):
@@ -133,11 +135,13 @@ with open(filename, "r") as filestream:
                     pos_y = numpy.zeros(n_particles)
                     pos_z = numpy.zeros(n_particles)
                     w = numpy.zeros(n_particles)
+                    dense_p = numpy.zeros(n_particles)
+                    less_p = numpy.zeros(n_particles)
                     update = 1
                 if (average_number > 0 and update == 1):
                     update = 0
                     if (zero_flag == 0):
-                        g_y = ( poi_before * g_y + average_number * g_temp) / float(average_number+poi_before)
+                        g_y = (poi_before * g_y + average_number * g_temp) / float(average_number+poi_before)
                         poi_before += average_number
                         print(average_number)
         else:
