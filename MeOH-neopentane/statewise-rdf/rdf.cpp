@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <cmath>
+#include <cstdlib>
 
 typedef enum species {kL, kD, kM, kN} Species;
 
@@ -63,14 +64,14 @@ int main(int argc, char *argv[]) {
     std::vector<double> histogram_increment_vals(n_histogram_bins, 0.0);
     std::vector<double> histogram_vols(n_histogram_bins);
 
-    for (size_t i = 0; i < n_histogram_bins; i++) {
+    for (size_t i = 0; i < n_histogram_bins; ++i) {
         histogram_radii[i] = ((double) i + 0.5) * histogram_binwidth;
         histogram_vols[i] = (4.0 / 3.0) * M_PI * pow(histogram_binwidth, 3.0) * ((double) (3 * i * (i + 1) + 1));
         // std::cout << "Bin " << i << " has radius " << histogram_radii[i] << " and shell volume " << histogram_vols[i] << std::endl;
     }
 
     std::ifstream traj_filestream;
-    traj_filestream.open(traj_filename);
+    traj_filestream.open(traj_filename.c_str());
     std::string junk;
     size_t curr_timestep = 0;
 
@@ -109,6 +110,7 @@ int main(int argc, char *argv[]) {
             z[i] *= box_length;
             wrap_coordinate(z[i], box_length);
         }
+        skip_line(traj_filestream); // Move to the next line
 
         // Do g(r) calculation.
 
@@ -119,7 +121,7 @@ int main(int argc, char *argv[]) {
         }
         // Reset histogram increment to zero.
         for (size_t i = 0; i < n_histogram_bins; ++i) {
-            histogram_increment_vals[i] = 0;
+            histogram_increment_vals[i] = 0.0;
         }
 
         double pivot_weight = 0.0;
@@ -203,13 +205,12 @@ int main(int argc, char *argv[]) {
             histogram_vals[i] = (last_total_pivot_number * histogram_vals[i] + curr_pivot_number * histogram_increment_vals[i]) / (last_total_pivot_number + curr_pivot_number);
         }
         last_total_pivot_number += curr_pivot_number;
-
         iframe++;
     }
 
     // Print out the final g(r)
     std::ofstream output_filestream;
-    output_filestream.open(output_filename);
+    output_filestream.open(output_filename.c_str());
     for (size_t i = 0; i < n_histogram_bins; ++i) {
         output_filestream << histogram_radii[i] << " " << histogram_vals[i] << std::endl;
     }
