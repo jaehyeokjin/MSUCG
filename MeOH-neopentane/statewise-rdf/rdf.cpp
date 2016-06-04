@@ -37,8 +37,8 @@ double get_weight(const size_t particle_id, const Species species, const std::ve
 int main(int argc, char *argv[]) {
     std::cout << "Hello!" << std::endl;
 
-    if (argc != 5) {
-        std::cout << "Usage: " << argv[0] << ": trajectory_filename output_filename pivot_species other_species" << std::endl;
+    if (argc != 6) {
+        std::cout << "Usage: " << argv[0] << ": trajectory_filename output_filename pivot_species other_species position_scaling_flag" << std::endl;
         exit(EXIT_SUCCESS);
     }
 
@@ -47,6 +47,7 @@ int main(int argc, char *argv[]) {
 
     Species pivot_species = parse_species(argv[3]);
     Species other_species = parse_species(argv[4]);
+    size_t scaling_flag = (size_t) argv[5];
 
     // System specs
     size_t n_sites = 1050;
@@ -103,11 +104,13 @@ int main(int argc, char *argv[]) {
 
         // Scale all coordinates by the box size and wrap.
         for (size_t i = 0; i < n_sites; ++i) {
-            x[i] *= box_length;
+            if (scaling_flag == 1){
+                x[i] *= box_length;
+                y[i] *= box_length;
+                z[i] *= box_length;
+            }
             wrap_coordinate(x[i], box_length);
-            y[i] *= box_length;
             wrap_coordinate(y[i], box_length);
-            z[i] *= box_length;
             wrap_coordinate(z[i], box_length);
         }
         skip_line(traj_filestream); // Move to the next line
@@ -206,6 +209,7 @@ int main(int argc, char *argv[]) {
         }
         last_total_pivot_number += curr_pivot_number;
         iframe++;
+        std::cout << iframe << " is processed!" << std::endl;
     }
 
     // Print out the final g(r)
