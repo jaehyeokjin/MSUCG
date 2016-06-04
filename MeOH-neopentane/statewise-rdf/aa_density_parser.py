@@ -24,7 +24,7 @@ box_size = 42.97861
 
 # Pre-defined string (in order to save the time for processing)
 str_a = "ITEM: TIMESTEP\n"
-str_b = "\nITEM: NUMBER OF ATOMS\n1050\nITEM: BOX BOUNDS pp pp pp\n0.00000 43.11145\n0.00000 43.11145\n0.00000 43.11145\nITEM: ATOMS id type x y z vx vy vz fx fy fz c_5 c_4\n" # c_4 is dummy variable in here - but remained as consistent with rdf processing code
+str_b = "\nITEM: NUMBER OF ATOMS\n1050\nITEM: BOX BOUNDS pp pp pp\n0.00000 42.97860\n0.00000 42.97860\n0.00000 42.97860\nITEM: ATOMS id type x y z vx vy vz fx fy fz c_5 c_4\n" # c_4 is dummy variable in here - but remained as consistent with rdf processing code
 ###########################################################
 ############### Trajectory Processing ...  ################
 ###########################################################
